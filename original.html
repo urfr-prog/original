@@ -82,7 +82,7 @@ function buildBoards(){
     // contenu aléatoire pour avoir de la matière
     const state=new Array(TOTAL).fill(null);
     for(let c=0;c<COLS;c++){
-      const n=1+Math.floor(Math.random()*3);
+      const n=2+Math.floor(Math.random()*3);   // 2 à 4 pièces par colonne → 4ᵉ rangée visible
       for(let k=0;k<n;k++){ const row=ROWS-1-k; const idx=row*COLS+c;
         state[idx]=STATES[Math.floor(Math.random()*3)]; }
     }
@@ -125,13 +125,15 @@ function fit(){
   const w=innerWidth,h=innerHeight,aspect=w/h;
   renderer.setSize(w,h); camera.aspect=aspect;
   const vFOV=camera.fov*Math.PI/180;
-  const needH=(FACE_H*1.04)/(2*Math.tan(vFOV/2));
-  const needW=(FACE_W*1.04)/(2*Math.tan(vFOV/2)*aspect);
-  const dist=Math.max(needH,needW)+RADIUS;
-  // le plateau face caméra est centré en Y≈0 ; on vise légèrement plus haut → grille calée bas
+  // PAYSAGE : la HAUTEUR est la ressource rare → on cadre sur elle seule.
+  // Les 4 rangées remplissent l'écran de haut en bas ; la grille étant carrée,
+  // elle reste centrée en largeur sans déborder.
+  const needH=(FACE_H*1.02)/(2*Math.tan(vFOV/2));
+  const dist=needH+RADIUS;
+  // coller la grille en BAS : viser SOUS le centre (lookY<0 → la grille descend dans le cadre)
   const worldPerPx=(2*dist*Math.tan(vFOV/2))/h;
-  const dropPx=h*0.05;                       // grille déjà quasi pleine → faible marge bas
-  const lookY=dropPx*worldPerPx;
+  const halfBoardPx=(FACE_H/2)/worldPerPx;          // demi-hauteur grille en pixels
+  const lookY = -(h/2 - halfBoardPx)*worldPerPx;     // bord bas de la grille ≈ bord bas écran
   camera.position.set(0, lookY, dist);
   camera.lookAt(0, lookY, 0); camera.updateProjectionMatrix();
 }
