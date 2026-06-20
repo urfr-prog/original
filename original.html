@@ -91,43 +91,49 @@ function buildBoards(){
 }
 
 const cellMeshes=[];   // cellMeshes[f] = group of cells, rebuilt on change
-function renderBoard(f,faceGroup){
+// extraCol : si fourni, dessine une colonne supplémentaire À DROITE (la colonne neuve
+// qui va entrer), pour que le glissement la fasse apparaître en douceur.
+function renderBoard(f,faceGroup,extraCol){
   if(cellMeshes[f]) faceGroup.remove(cellMeshes[f]);
   const holder=new THREE.Group();
   boards[f].forEach((st,i)=>{ if(!st)return;
     const c=makeCell(st); const p=cellToLocal(i%COLS,Math.floor(i/COLS));
     c.position.set(p.x,p.y,0.01); holder.add(c); });
+  if(extraCol){ for(let r=0;r<ROWS;r++){ const st=extraCol[r]; if(!st)continue;
+    const c=makeCell(st); const p=cellToLocal(COLS,r);   // col = COLS → juste hors cadre droit
+    c.position.set(p.x,p.y,0.01); holder.add(c); } }
   faceGroup.add(holder); cellMeshes[f]=holder;
 }
 
-// ─── POUSSÉE EN CHAÎNE (le nouveau langage) ────────────────────────────────
-// Pousser un bloc dans une direction fait avancer d'UN cran toute la file contiguë
-// dans cette direction. Le bloc de tête, s'il atteint le bord, TOMBE dans le vide.
-// dir : 'left' | 'right' | 'up' | 'down'.  i = index du bloc saisi.
+// ─── DÉROULÉ : bouger un bloc fait AVANCER le plateau d'un cran vers la gauche ──
+// 1) glisser un bloc sur une case voisine libre ;
+// 2) tout le plateau glisse d'1 colonne vers la GAUCHE (colonne 0 sort du cadre) ;
+// 3) une nouvelle colonne est générée à droite.
 const DELTA={ left:{dc:-1,dr:0}, right:{dc:1,dr:0}, up:{dc:0,dr:-1}, down:{dc:0,dr:1} };
 function inBounds(c,r){ return c>=0&&c<COLS&&r>=0&&r<ROWS; }
 
-function push(f,i,dir){
+function newColumn(){
+  const col=new Array(ROWS).fill(null);
+  for(let r=0;r<ROWS;r++){ if(Math.random()<0.45) col[r]=STATES[Math.floor(Math.random()*3)]; }
+  return col;
+}
+
+// glisse le bloc i d'une case dans dir (si voisine libre). Retourne true si déplacé.
+function moveBlock(f,i,dir){
   const b=boards[f]; if(!b[i])return false;
   const {dc,dr}=DELTA[dir];
-  let c=i%COLS, r=Math.floor(i/COLS);
-  // 1) collecter la file contiguë de blocs à partir du bloc saisi, dans le sens de poussée
-  const chain=[];
-  while(inBounds(c,r) && b[r*COLS+c]){ chain.push(r*COLS+c); c+=dc; r+=dr; }
-  if(chain.length===0)return false;
-  // 2) la tête de file = dernier de la chaîne ; sa case suivante :
-  const headC=(chain[chain.length-1]%COLS)+dc, headR=Math.floor(chain[chain.length-1]/COLS)+dr;
-  const headFalls = !inBounds(headC,headR);            // tête au bord → tombe
-  // si la tête NE tombe pas et que la case devant est occupée → blocage total (rien ne bouge)
-  if(!headFalls && b[headR*COLS+headC]) return false;
-  // 3) avancer chaque bloc d'un cran, du plus avancé au plus reculé (évite l'écrasement)
-  const moved=chain.map(idx=>({ from:idx, st:b[idx] }));
-  if(headFalls) moved.pop();                           // la tête disparaît
-  // vider d'abord toutes les cases source
-  chain.forEach(idx=>b[idx]=null);
-  // réécrire aux nouvelles positions
-  moved.forEach(m=>{ const cc=(m.from%COLS)+dc, rr=Math.floor(m.from/COLS)+dr; b[rr*COLS+cc]=m.st; });
-  return true;
+  const c=i%COLS+dc, r=Math.floor(i/COLS)+dr;
+  if(!inBounds(c,r) || b[r*COLS+c]) return false;   // hors cadre ou occupée
+  b[r*COLS+c]=b[i]; b[i]=null; return true;
+}
+
+// commit logique du défilement : décale à gauche et insère la colonne déjà tirée.
+function commitScroll(f,fresh){
+  const b=boards[f];
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS-1;c++){ b[r*COLS+c]=b[r*COLS+c+1]; }   // décale à gauche
+    b[r*COLS+(COLS-1)]=fresh[r];                               // colonne neuve à droite
+  }
 }
 
 // ─── bascule du prisme autour de X ─────────────────────────────────────────
@@ -183,9 +189,20 @@ canvas.addEventListener('pointerup',e=>{
   let dir;
   if(Math.abs(dx)>Math.abs(dy)) dir = dx<0 ? 'left':'right';
   else                          dir = dy<0 ? 'up':'down';
-  if(push(current,grabIdx,dir)){ const fg=prism.children[current]; renderBoard(current,fg); }
+  // bouger le bloc sur une voisine libre ; si réussi → le déroulé glisse d'un cran à gauche
+  if(!sliding && moveBlock(current,grabIdx,dir)){
+    startSlide(current);
+  }
   grabIdx=-1;
 });
+
+// ─── animation du défilement (glissement doux d'une colonne vers la gauche) ──
+let sliding=false, slideX=0, slideFresh=null, slideFace=0;
+function startSlide(f){
+  slideFresh=newColumn();
+  renderBoard(f, prism.children[f], slideFresh);   // dessine plateau + colonne entrante à droite
+  slideX=0; slideFace=f; sliding=true;
+}
 
 // ─── boucle ────────────────────────────────────────────────────────────────
 function animate(){
@@ -194,6 +211,17 @@ function animate(){
     prismAngle += (targetAngle-prismAngle)*0.16;
     if(Math.abs(targetAngle-prismAngle)<0.001){ prismAngle=targetAngle; animating=false; }
     prism.rotation.x=prismAngle;
+  }
+  if(sliding){
+    slideX += (-CELL_W - slideX)*0.18;
+    const holder=cellMeshes[slideFace];
+    if(holder) holder.position.x = slideX;
+    if(Math.abs(-CELL_W - slideX) < 0.004){          // fin du glissement
+      commitScroll(slideFace, slideFresh);
+      if(holder) holder.position.x = 0;
+      renderBoard(slideFace, prism.children[slideFace]);
+      sliding=false; slideFresh=null;
+    }
   }
   renderer.render(scene,camera);
 }
