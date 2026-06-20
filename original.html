@@ -200,8 +200,8 @@ canvas.addEventListener('pointerup',e=>{
   if(grabIdx<0){ grabIdx=-1; return; }
   const dx=e.clientX-sx, dy=e.clientY-sy, TH=12;
   if(Math.abs(dx)<TH){ grabIdx=-1; return; }            // pas de swipe horizontal → rien
-  // swipe vers la DROITE → bloc va à GAUCHE ; swipe vers la GAUCHE → bloc va à DROITE.
-  const dir = dx>0 ? 'left' : 'right';
+  // deux sens : swipe à GAUCHE → bloc à gauche ; swipe à DROITE → bloc à droite.
+  const dir = dx<0 ? 'left' : 'right';
   // si la case voisine est libre : on ANIME d'abord le bloc vers elle, puis le plateau défile.
   if(!sliding && !movingBlock){
     const {dc,dr}=DELTA[dir];
@@ -219,9 +219,9 @@ let movingBlock=null;   // { face, fromIdx, toIdx, mesh, t, from:{x,y}, to:{x,y}
 const MOVE_DUR=0.16, SLIDE_DUR=0.20, TILT_DUR=0.30;   // durées (s) — courtes = vif
 let lastT=0;
 function startBlockMove(f, fromIdx, toIdx, dir){
-  const holder=cellMeshes[f]; if(!holder){ moveBlock(f,fromIdx,dir); startSlide(f); return; }
+  const holder=cellMeshes[f]; if(!holder){ moveBlock(f,fromIdx,dir); renderBoard(f,prism.children[f]); return; }
   const mesh=holder.children.find(ch=>ch.userData.idx===fromIdx);
-  if(!mesh){ moveBlock(f,fromIdx,dir); startSlide(f); return; }
+  if(!mesh){ moveBlock(f,fromIdx,dir); renderBoard(f,prism.children[f]); return; }
   mesh.scale.set(1,1,1); mesh.position.z=0.04;        // bloc en mouvement reste légèrement au-dessus
   const a=cellToLocal(fromIdx%COLS,Math.floor(fromIdx/COLS));
   const b=cellToLocal(toIdx%COLS,Math.floor(toIdx/COLS));
@@ -257,7 +257,7 @@ function animate(now){
     if(mb.t>=1){
       moveBlock(mb.face, mb.fromIdx, mb.dir);          // commit logique du déplacement
       movingBlock=null;
-      startSlide(slideFace=mb.face);                   // puis le plateau défile
+      renderBoard(mb.face, prism.children[mb.face]);    // redessine à la position propre
     }
   }
   if(sliding){
