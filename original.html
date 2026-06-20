@@ -7,21 +7,10 @@
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden;}
   #c{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;}
-  .hint{position:fixed;left:calc(env(safe-area-inset-left,0px) + 14px);
-    bottom:calc(env(safe-area-inset-bottom,0px) + 14px);z-index:10;max-width:170px;
-    font:12px system-ui,sans-serif;line-height:1.4;
-    color:rgba(180,200,220,.6);background:rgba(20,22,36,.55);padding:8px 14px;
-    border-radius:16px;backdrop-filter:blur(6px);pointer-events:none;letter-spacing:.3px;}
-  .badge{position:fixed;left:calc(env(safe-area-inset-left,0px) + 14px);
-    top:calc(env(safe-area-inset-top,0px) + 12px);z-index:10;
-    font:600 13px system-ui,sans-serif;color:rgba(150,180,210,.75);
-    background:rgba(20,22,36,.5);padding:5px 12px;border-radius:14px;backdrop-filter:blur(6px);}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div class="badge" id="badge">plateau 1 / 4</div>
-<div class="hint">swipe ↕ ou tap haut / bas<br>le plateau du haut roule vers toi</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 /* ─── ADAM · bac à sable PAYSAGE ────────────────────────────────────────────
@@ -37,7 +26,7 @@ const FACE_W=COLS*CELL_W, FACE_H=ROWS*CELL_W, HALF=FACE_H/2;
 const RADIUS = HALF/Math.tan(Math.PI/4);          // bascule sur X → on cale sur la HAUTEUR
 const FACE_ANG = 2*Math.PI/NFACES;                // 90° entre faces
 
-const canvas=document.getElementById('c'), badge=document.getElementById('badge');
+const canvas=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 renderer.setClearColor(0x07080f);
@@ -129,7 +118,6 @@ function tilt(dir){            // dir>0 : plateau du HAUT descend vers toi
   current=((current+dir)%NFACES+NFACES)%NFACES;
   targetAngle -= dir*FACE_ANG; // le groupe tourne en sens inverse pour amener la face
   animating=true;
-  badge.textContent='plateau '+(current+1)+' / '+NFACES;
 }
 
 // ─── caméra paysage plein écran ────────────────────────────────────────────
@@ -137,14 +125,13 @@ function fit(){
   const w=innerWidth,h=innerHeight,aspect=w/h;
   renderer.setSize(w,h); camera.aspect=aspect;
   const vFOV=camera.fov*Math.PI/180;
-  const needH=(FACE_H*1.25)/(2*Math.tan(vFOV/2));
-  const needW=(FACE_W*1.18)/(2*Math.tan(vFOV/2)*aspect);
+  const needH=(FACE_H*1.04)/(2*Math.tan(vFOV/2));
+  const needW=(FACE_W*1.04)/(2*Math.tan(vFOV/2)*aspect);
   const dist=Math.max(needH,needW)+RADIUS;
-  // le plateau face caméra est centré en (0, RADIUS, ...) ; on vise plus HAUT que lui
-  // pour le faire glisser vers le BAS du cadre. lookY > faceCenterY → grille calée en bas.
+  // le plateau face caméra est centré en Y≈0 ; on vise légèrement plus haut → grille calée bas
   const worldPerPx=(2*dist*Math.tan(vFOV/2))/h;
-  const dropPx=h*0.16;                       // descente de la grille (16% de la hauteur écran)
-  const lookY=dropPx*worldPerPx;             // la face active est en Y≈0 ; viser au-dessus → grille en bas
+  const dropPx=h*0.05;                       // grille déjà quasi pleine → faible marge bas
+  const lookY=dropPx*worldPerPx;
   camera.position.set(0, lookY, dist);
   camera.lookAt(0, lookY, 0); camera.updateProjectionMatrix();
 }
