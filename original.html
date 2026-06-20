@@ -132,6 +132,30 @@ function moveBlock(f,i,dir){
   b[r*COLS+c]=b[i]; b[i]=null; return true;
 }
 
+// POUSSÉE horizontale type domino, sur la ligne de i, dans dir ('left'/'right').
+// Pousse i + tous les blocs collés devant lui d'une case. Bloque seulement si le
+// bloc le plus avancé touche le bord. Retourne la liste des index déplacés (from→to)
+// pour pouvoir les animer, ou null si rien ne peut bouger.
+function pushRow(f,i,dir){
+  const b=boards[f];
+  const row=Math.floor(i/COLS), step=(dir==='right')?1:-1;
+  let col=i%COLS;
+  // remonte la file de blocs contigus dans le sens de poussée jusqu'au premier vide ou au bord
+  const chain=[];                 // colonnes occupées formant la file, de i vers l'avant
+  let c=col;
+  while(c>=0 && c<COLS && b[row*COLS+c]){ chain.push(c); c+=step; }
+  // c = première case après la file. Si hors cadre → file collée au bord, rien ne bouge.
+  if(c<0 || c>=COLS) return null;
+  // déplace chaque bloc de la file d'une case vers l'avant, en partant du plus avancé.
+  const moves=[];
+  for(let k=chain.length-1;k>=0;k--){
+    const from=row*COLS+chain[k], to=row*COLS+chain[k]+step;
+    b[to]=b[from]; b[from]=null;
+    moves.push({from,to});
+  }
+  return moves;                   // ordre : du plus avancé au plus arrière
+}
+
 // commit logique du défilement, selon le sens.
 // 'left'  : décale à gauche, colonne neuve à DROITE.
 // 'right' : décale à droite, colonne neuve à GAUCHE.
@@ -213,30 +237,37 @@ canvas.addEventListener('pointerup',e=>{
   if(Math.abs(dx)<TH){ grabIdx=-1; return; }            // pas de swipe horizontal → rien
   // deux sens : swipe à GAUCHE → bloc à gauche ; swipe à DROITE → bloc à droite.
   const dir = dx<0 ? 'left' : 'right';
-  // si la case voisine est libre : on ANIME d'abord le bloc vers elle, puis le plateau défile.
+  // POUSSÉE domino : le bloc saisi pousse la file devant lui. Aucune condition de case
+  // libre — ça ne bloque que si la file touche déjà le bord.
   if(!sliding && !movingBlock){
-    const {dc,dr}=DELTA[dir];
-    const c=grabIdx%COLS+dc, r=Math.floor(grabIdx/COLS)+dr;
-    if(inBounds(c,r) && !boards[current][c+r*COLS]){
-      startBlockMove(current, grabIdx, c+r*COLS, dir);
-    }
+    const moves=pushRow(current, grabIdx, dir);
+    if(moves) startPush(current, moves, dir);          // anime la file puis défile
   }
   grabIdx=-1;
 });
 canvas.addEventListener('pointercancel',()=>{ releaseGrab(); grabIdx=-1; });
 
-// ─── animation du BLOC déplacé (on voit la pièce glisser vers sa voisine) ────
-let movingBlock=null;   // { face, fromIdx, toIdx, mesh, t, from:{x,y}, to:{x,y} }
+// ─── animation de la POUSSÉE (toute la file glisse d'une case) ───────────────
+let movingBlock=null;   // { face, dir, items:[{mesh,from:{x,y},to:{x,y}}], t }
 const MOVE_DUR=0.14, SLIDE_DUR=0.34, TILT_DUR=0.30;   // bloc vif, défilement plus lent → mouvements distincts
 let lastT=0;
-function startBlockMove(f, fromIdx, toIdx, dir){
-  const holder=cellMeshes[f]; if(!holder){ moveBlock(f,fromIdx,dir); startSlide(f,dir); return; }
-  const mesh=holder.children.find(ch=>ch.userData.idx===fromIdx);
-  if(!mesh){ moveBlock(f,fromIdx,dir); startSlide(f,dir); return; }
-  mesh.scale.set(1,1,1); mesh.position.z=0.04;        // bloc en mouvement reste légèrement au-dessus
-  const a=cellToLocal(fromIdx%COLS,Math.floor(fromIdx/COLS));
-  const b=cellToLocal(toIdx%COLS,Math.floor(toIdx/COLS));
-  movingBlock={ face:f, fromIdx, toIdx, dir, mesh, t:0, from:{x:a.x,y:a.y}, to:{x:b.x,y:b.y} };
+// moves = liste {from,to} renvoyée par pushRow (board DÉJÀ à jour). On anime les meshes
+// depuis leur position d'origine vers la nouvelle, puis on enchaîne le défilement.
+function startPush(f, moves, dir){
+  const holder=cellMeshes[f];
+  if(!holder || !moves || !moves.length){ startSlide(f,dir); return; }
+  const items=[];
+  for(const mv of moves){
+    const mesh=holder.children.find(ch=>ch.userData.idx===mv.from);
+    if(!mesh) continue;
+    mesh.userData.idx=mv.to;                         // recale l'index logique du mesh
+    mesh.position.z=0.04;
+    const a=cellToLocal(mv.from%COLS,Math.floor(mv.from/COLS));
+    const b=cellToLocal(mv.to%COLS,Math.floor(mv.to/COLS));
+    items.push({mesh,from:{x:a.x,y:a.y},to:{x:b.x,y:b.y}});
+  }
+  if(!items.length){ startSlide(f,dir); return; }
+  movingBlock={ face:f, dir, items, t:0 };
 }
 
 // ─── animation du défilement (glissement doux, sens = celui du déplacement) ──
@@ -265,12 +296,14 @@ function animate(now){
     const mb=movingBlock; mb.t += dt/MOVE_DUR;
     const tt=mb.t>=1?1:mb.t;
     const e=1-Math.pow(1-tt,3);                       // easeOutCubic
-    mb.mesh.position.x = mb.from.x+(mb.to.x-mb.from.x)*e;
-    mb.mesh.position.y = mb.from.y+(mb.to.y-mb.from.y)*e;
+    for(const it of mb.items){
+      it.mesh.position.x = it.from.x+(it.to.x-it.from.x)*e;
+      it.mesh.position.y = it.from.y+(it.to.y-it.from.y)*e;
+    }
     if(mb.t>=1){
-      moveBlock(mb.face, mb.fromIdx, mb.dir);          // commit logique du déplacement
+      const f=mb.face, dir=mb.dir;
       movingBlock=null;
-      startSlide(slideFace=mb.face, mb.dir);           // puis le plateau défile dans le même sens
+      startSlide(f, dir);                              // board déjà à jour → défilement enchaîne
     }
   }
   if(sliding){
