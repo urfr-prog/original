@@ -50,8 +50,10 @@ const STATES=Object.keys(STATE_COL);
 
 function makeCell(state){
   const g=new THREE.Group();
-  // hitbox invisible : carré PLEIN couvrant toute la case (zone cliquable franche, sans gouttière)
-  const hit=new THREE.Mesh(new THREE.PlaneGeometry(CELL_W,CELL_W),
+  // hitbox invisible : calée sur la matière visible (+ fine marge), pas sur toute la case,
+  // pour qu'elle ne déborde pas sur le carré voisin (sinon le haut attrape celui du dessus).
+  const HIT=SZ+0.04;
+  const hit=new THREE.Mesh(new THREE.PlaneGeometry(HIT,HIT),
     new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false}));
   hit.position.z=-0.001; g.add(hit);
   // corps
@@ -93,15 +95,18 @@ function buildBoards(){
 const cellMeshes=[];   // cellMeshes[f] = group of cells, rebuilt on change
 // extraCol : si fourni, dessine une colonne supplémentaire À DROITE (la colonne neuve
 // qui va entrer), pour que le glissement la fasse apparaître en douceur.
-function renderBoard(f,faceGroup,extraCol){
+// extraCol : colonne entrante. extraSide='right' → dessinée hors cadre à droite (col=COLS) ;
+// extraSide='left' → hors cadre à gauche (col=-1).
+function renderBoard(f,faceGroup,extraCol,extraSide){
   if(cellMeshes[f]) faceGroup.remove(cellMeshes[f]);
   const holder=new THREE.Group();
   boards[f].forEach((st,i)=>{ if(!st)return;
     const c=makeCell(st); const p=cellToLocal(i%COLS,Math.floor(i/COLS));
     c.position.set(p.x,p.y,0.01); c.userData.idx=i; holder.add(c); });
-  if(extraCol){ for(let r=0;r<ROWS;r++){ const st=extraCol[r]; if(!st)continue;
-    const c=makeCell(st); const p=cellToLocal(COLS,r);   // col = COLS → juste hors cadre droit
-    c.position.set(p.x,p.y,0.01); holder.add(c); } }
+  if(extraCol){ const xcol=(extraSide==='left')?-1:COLS;
+    for(let r=0;r<ROWS;r++){ const st=extraCol[r]; if(!st)continue;
+      const c=makeCell(st); const p=cellToLocal(xcol,r);
+      c.position.set(p.x,p.y,0.01); holder.add(c); } }
   faceGroup.add(holder); cellMeshes[f]=holder;
 }
 
@@ -127,12 +132,21 @@ function moveBlock(f,i,dir){
   b[r*COLS+c]=b[i]; b[i]=null; return true;
 }
 
-// commit logique du défilement : décale à gauche et insère la colonne déjà tirée.
-function commitScroll(f,fresh){
+// commit logique du défilement, selon le sens.
+// 'left'  : décale à gauche, colonne neuve à DROITE.
+// 'right' : décale à droite, colonne neuve à GAUCHE.
+function commitScroll(f,fresh,dir){
   const b=boards[f];
-  for(let r=0;r<ROWS;r++){
-    for(let c=0;c<COLS-1;c++){ b[r*COLS+c]=b[r*COLS+c+1]; }   // décale à gauche
-    b[r*COLS+(COLS-1)]=fresh[r];                               // colonne neuve à droite
+  if(dir==='right'){
+    for(let r=0;r<ROWS;r++){
+      for(let c=COLS-1;c>0;c--){ b[r*COLS+c]=b[r*COLS+c-1]; }   // décale à droite
+      b[r*COLS+0]=fresh[r];                                      // colonne neuve à gauche
+    }
+  } else {
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS-1;c++){ b[r*COLS+c]=b[r*COLS+c+1]; }   // décale à gauche
+      b[r*COLS+(COLS-1)]=fresh[r];                              // colonne neuve à droite
+    }
   }
 }
 
@@ -216,20 +230,22 @@ let movingBlock=null;   // { face, fromIdx, toIdx, mesh, t, from:{x,y}, to:{x,y}
 const MOVE_DUR=0.14, SLIDE_DUR=0.34, TILT_DUR=0.30;   // bloc vif, défilement plus lent → mouvements distincts
 let lastT=0;
 function startBlockMove(f, fromIdx, toIdx, dir){
-  const holder=cellMeshes[f]; if(!holder){ moveBlock(f,fromIdx,dir); startSlide(f); return; }
+  const holder=cellMeshes[f]; if(!holder){ moveBlock(f,fromIdx,dir); startSlide(f,dir); return; }
   const mesh=holder.children.find(ch=>ch.userData.idx===fromIdx);
-  if(!mesh){ moveBlock(f,fromIdx,dir); startSlide(f); return; }
+  if(!mesh){ moveBlock(f,fromIdx,dir); startSlide(f,dir); return; }
   mesh.scale.set(1,1,1); mesh.position.z=0.04;        // bloc en mouvement reste légèrement au-dessus
   const a=cellToLocal(fromIdx%COLS,Math.floor(fromIdx/COLS));
   const b=cellToLocal(toIdx%COLS,Math.floor(toIdx/COLS));
   movingBlock={ face:f, fromIdx, toIdx, dir, mesh, t:0, from:{x:a.x,y:a.y}, to:{x:b.x,y:b.y} };
 }
 
-// ─── animation du défilement (glissement doux d'une colonne vers la gauche) ──
-let sliding=false, slideX=0, slideFresh=null, slideFace=0, slideT=0;
-function startSlide(f){
+// ─── animation du défilement (glissement doux, sens = celui du déplacement) ──
+let sliding=false, slideX=0, slideFresh=null, slideFace=0, slideT=0, slideDir='left';
+function startSlide(f,dir){
+  slideDir=dir||'left';
   slideFresh=newColumn();
-  renderBoard(f, prism.children[f], slideFresh);   // dessine plateau + colonne entrante à droite
+  const side=(slideDir==='right')?'left':'right';   // colonne neuve à l'opposé du défilement
+  renderBoard(f, prism.children[f], slideFresh, side);
   slideX=0; slideT=0; slideFace=f; sliding=true;
 }
 
@@ -254,18 +270,19 @@ function animate(now){
     if(mb.t>=1){
       moveBlock(mb.face, mb.fromIdx, mb.dir);          // commit logique du déplacement
       movingBlock=null;
-      startSlide(slideFace=mb.face);                   // puis le plateau défile (vitesse différente)
+      startSlide(slideFace=mb.face, mb.dir);           // puis le plateau défile dans le même sens
     }
   }
   if(sliding){
     slideT += dt/SLIDE_DUR;
     const tt=slideT>=1?1:slideT;
     const e=1-Math.pow(1-tt,3);                       // easeOutCubic
-    slideX = -CELL_W*e;
+    const sign=(slideDir==='right')?1:-1;            // droite → glisse vers +x ; gauche → -x
+    slideX = sign*CELL_W*e;
     const holder=cellMeshes[slideFace];
     if(holder) holder.position.x = slideX;
     if(slideT>=1){                                    // fin du glissement
-      commitScroll(slideFace, slideFresh);
+      commitScroll(slideFace, slideFresh, slideDir);
       if(holder) holder.position.x = 0;
       renderBoard(slideFace, prism.children[slideFace]);
       sliding=false; slideFresh=null;
