@@ -87,32 +87,22 @@ function buildBoards(){
 }
 
 const cellMeshes=[];   // cellMeshes[f] = group of cells, rebuilt on change
-// extraCol : si fourni, dessine une colonne supplémentaire À DROITE (la colonne neuve
-// qui va entrer), pour que le glissement la fasse apparaître en douceur.
-function renderBoard(f,faceGroup,extraCol){
+function renderBoard(f,faceGroup){
   if(cellMeshes[f]) faceGroup.remove(cellMeshes[f]);
   const holder=new THREE.Group();
   boards[f].forEach((st,i)=>{ if(!st)return;
     const c=makeCell(st); const p=cellToLocal(i%COLS,Math.floor(i/COLS));
     c.position.set(p.x,p.y,0.01); c.userData.idx=i; holder.add(c); });
-  if(extraCol){ for(let r=0;r<ROWS;r++){ const st=extraCol[r]; if(!st)continue;
-    const c=makeCell(st); const p=cellToLocal(COLS,r);   // col = COLS → juste hors cadre droit
-    c.position.set(p.x,p.y,0.01); holder.add(c); } }
   faceGroup.add(holder); cellMeshes[f]=holder;
 }
 
-// ─── DÉROULÉ : bouger un bloc fait AVANCER le plateau d'un cran vers la gauche ──
-// 1) glisser un bloc sur une case voisine libre ;
-// 2) tout le plateau glisse d'1 colonne vers la GAUCHE (colonne 0 sort du cadre) ;
-// 3) une nouvelle colonne est générée à droite.
+// ─── RUBAN CONTINU : les 4 faces forment un ruban vertical enroulé sur le prisme ──
+// Un bloc poussé vers le HAUT au bord supérieur franchit l'arête → réapparaît en BAS
+// de la face suivante (current+1). Poussé vers le BAS au bord inférieur → en HAUT de
+// la face précédente (current-1). Déplacements internes : voisine libre, comme avant.
 const DELTA={ left:{dc:-1,dr:0}, right:{dc:1,dr:0}, up:{dc:0,dr:-1}, down:{dc:0,dr:1} };
 function inBounds(c,r){ return c>=0&&c<COLS&&r>=0&&r<ROWS; }
-
-function newColumn(){
-  const col=new Array(ROWS).fill(null);
-  for(let r=0;r<ROWS;r++){ if(Math.random()<0.45) col[r]=STATES[Math.floor(Math.random()*3)]; }
-  return col;
-}
+const wrap=f=>((f%NFACES)+NFACES)%NFACES;
 
 // glisse le bloc i d'une case dans dir (si voisine libre). Retourne true si déplacé.
 function moveBlock(f,i,dir){
@@ -123,13 +113,19 @@ function moveBlock(f,i,dir){
   b[r*COLS+c]=b[i]; b[i]=null; return true;
 }
 
-// commit logique du défilement : décale à gauche et insère la colonne déjà tirée.
-function commitScroll(f,fresh){
-  const b=boards[f];
-  for(let r=0;r<ROWS;r++){
-    for(let c=0;c<COLS-1;c++){ b[r*COLS+c]=b[r*COLS+c+1]; }   // décale à gauche
-    b[r*COLS+(COLS-1)]=fresh[r];                               // colonne neuve à droite
-  }
+// transfert d'arête : le bloc passe sur la face voisine du ruban.
+// Retourne la face cible si l'arrivée est libre, sinon -1.
+function edgeTarget(f,i,dir){
+  const col=i%COLS, row=Math.floor(i/COLS);
+  if(dir==='up'   && row===0)      { const nf=wrap(f+1); return boards[nf][(ROWS-1)*COLS+col]?-1:nf; }
+  if(dir==='down' && row===ROWS-1) { const nf=wrap(f-1); return boards[nf][col]?-1:nf; }
+  return -1;
+}
+// commit logique du franchissement. Retourne la face d'arrivée.
+function commitEdge(f,i,dir){
+  const col=i%COLS, nf=wrap(dir==='up'?f+1:f-1);
+  const ni=dir==='up' ? (ROWS-1)*COLS+col : col;
+  boards[nf][ni]=boards[f][i]; boards[f][i]=null; return nf;
 }
 
 // ─── bascule du prisme autour de X ─────────────────────────────────────────
@@ -177,42 +173,63 @@ function pickCell(px,py){
   return row*COLS+col;
 }
 let grabIdx=-1, sx=0, sy=0;
+
+// ─── bascule manuelle : swipe vertical à DEUX doigts fait tourner le ruban ──
+let twoActive=false, twoStartY=0;
+canvas.addEventListener('touchstart',e=>{
+  if(e.touches.length===2){ twoActive=true; twoStartY=(e.touches[0].clientY+e.touches[1].clientY)/2; }
+},{passive:false});
+canvas.addEventListener('touchmove',e=>{ if(twoActive) e.preventDefault(); },{passive:false});
+canvas.addEventListener('touchend',e=>{
+  if(twoActive && e.touches.length<2){
+    const t=e.changedTouches[0]; const y=t?t.clientY:twoStartY; const d=y-twoStartY;
+    if(Math.abs(d)>40) tilt(d<0 ? 1 : -1);   // 2 doigts vers le HAUT → face du dessus en façade
+    twoActive=false; grabIdx=-1;
+  }
+},{passive:false});
+// fallback desktop (tests Mac) : flèches haut/bas = bascule
+addEventListener('keydown',e=>{ if(e.key==='ArrowUp')tilt(1); else if(e.key==='ArrowDown')tilt(-1); });
+
 canvas.addEventListener('pointerdown',e=>{ sx=e.clientX; sy=e.clientY; grabIdx=pickCell(e.clientX,e.clientY); });
 canvas.addEventListener('pointerup',e=>{
+  if(twoActive || animating){ grabIdx=-1; return; }            // gesture 2 doigts ou bascule en cours
   if(grabIdx<0){ grabIdx=-1; return; }
   const dx=e.clientX-sx, dy=e.clientY-sy, TH=24;
   if(Math.abs(dx)<TH && Math.abs(dy)<TH){ grabIdx=-1; return; }   // simple tap → rien
   let dir;
   if(Math.abs(dx)>Math.abs(dy)) dir = dx<0 ? 'left':'right';
   else                          dir = dy<0 ? 'up':'down';
-  // si la case voisine est libre : on ANIME d'abord le bloc vers elle, puis le plateau défile.
-  if(!sliding && !movingBlock){
+  if(!movingBlock && boards[current][grabIdx]){
     const {dc,dr}=DELTA[dir];
     const c=grabIdx%COLS+dc, r=Math.floor(grabIdx/COLS)+dr;
     if(inBounds(c,r) && !boards[current][c+r*COLS]){
-      startBlockMove(current, grabIdx, c+r*COLS, dir);
+      startBlockMove(current, grabIdx, c+r*COLS, dir);          // déplacement interne
+    } else if(edgeTarget(current,grabIdx,dir)>=0){
+      startEdgeMove(current, grabIdx, dir);                     // franchit l'arête du ruban
     }
   }
   grabIdx=-1;
 });
 
 // ─── animation du BLOC déplacé (on voit la pièce glisser vers sa voisine) ────
-let movingBlock=null;   // { face, fromIdx, toIdx, mesh, t, from:{x,y}, to:{x,y} }
+let movingBlock=null;   // { kind, face, fromIdx, dir, mesh, t, from, to }
 function startBlockMove(f, fromIdx, toIdx, dir){
-  const holder=cellMeshes[f]; if(!holder){ moveBlock(f,fromIdx,dir); startSlide(f); return; }
+  const holder=cellMeshes[f]; if(!holder){ moveBlock(f,fromIdx,dir); renderBoard(f,prism.children[f]); return; }
   const mesh=holder.children.find(ch=>ch.userData.idx===fromIdx);
-  if(!mesh){ moveBlock(f,fromIdx,dir); startSlide(f); return; }
+  if(!mesh){ moveBlock(f,fromIdx,dir); renderBoard(f,prism.children[f]); return; }
   const a=cellToLocal(fromIdx%COLS,Math.floor(fromIdx/COLS));
   const b=cellToLocal(toIdx%COLS,Math.floor(toIdx/COLS));
-  movingBlock={ face:f, fromIdx, toIdx, dir, mesh, t:0, from:{x:a.x,y:a.y}, to:{x:b.x,y:b.y} };
+  movingBlock={ kind:'move', face:f, fromIdx, dir, mesh, t:0, from:{x:a.x,y:a.y}, to:{x:b.x,y:b.y} };
 }
 
-// ─── animation du défilement (glissement doux d'une colonne vers la gauche) ──
-let sliding=false, slideX=0, slideFresh=null, slideFace=0;
-function startSlide(f){
-  slideFresh=newColumn();
-  renderBoard(f, prism.children[f], slideFresh);   // dessine plateau + colonne entrante à droite
-  slideX=0; slideFace=f; sliding=true;
+// le bloc glisse au-delà du bord (haut ou bas) puis est livré à la face voisine du ruban.
+function startEdgeMove(f, fromIdx, dir){
+  const holder=cellMeshes[f]; if(!holder){ commitEdge(f,fromIdx,dir); renderBoard(f,prism.children[f]); return; }
+  const mesh=holder.children.find(ch=>ch.userData.idx===fromIdx);
+  if(!mesh){ commitEdge(f,fromIdx,dir); renderBoard(f,prism.children[f]); return; }
+  const a=cellToLocal(fromIdx%COLS,Math.floor(fromIdx/COLS));
+  const dy=(dir==='up'?1:-1)*CELL_W*1.2;                     // sort par le bord
+  movingBlock={ kind:'edge', face:f, fromIdx, dir, mesh, t:0, from:{x:a.x,y:a.y}, to:{x:a.x,y:a.y+dy} };
 }
 
 // ─── boucle ────────────────────────────────────────────────────────────────
@@ -228,21 +245,17 @@ function animate(){
     const e=mb.t>=1?1:1-Math.pow(1-mb.t,3);          // easeOutCubic
     mb.mesh.position.x = mb.from.x+(mb.to.x-mb.from.x)*e;
     mb.mesh.position.y = mb.from.y+(mb.to.y-mb.from.y)*e;
+    if(mb.kind==='edge'){ const o=Math.max(0,1-mb.t); mb.mesh.children.forEach(ch=>ch.material&&(ch.material.opacity=o)); }
     if(mb.t>=1){
-      moveBlock(mb.face, mb.fromIdx, mb.dir);          // commit logique du déplacement
+      if(mb.kind==='edge'){
+        const nf=commitEdge(mb.face, mb.fromIdx, mb.dir);  // livré à la face voisine
+        renderBoard(mb.face, prism.children[mb.face]);     // retire le bloc de la face active
+        renderBoard(nf,       prism.children[nf]);         // l'affiche sur la voisine (à découvrir en basculant)
+      } else {
+        moveBlock(mb.face, mb.fromIdx, mb.dir);            // déplacement interne
+        renderBoard(mb.face, prism.children[mb.face]);
+      }
       movingBlock=null;
-      startSlide(slideFace=mb.face);                   // puis le plateau défile
-    }
-  }
-  if(sliding){
-    slideX += (-CELL_W - slideX)*0.18;
-    const holder=cellMeshes[slideFace];
-    if(holder) holder.position.x = slideX;
-    if(Math.abs(-CELL_W - slideX) < 0.004){          // fin du glissement
-      commitScroll(slideFace, slideFresh);
-      if(holder) holder.position.x = 0;
-      renderBoard(slideFace, prism.children[slideFace]);
-      sliding=false; slideFresh=null;
     }
   }
   renderer.render(scene,camera);
