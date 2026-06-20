@@ -45,22 +45,65 @@ function rrShape(w,h,r){ const s=new THREE.Shape(),x=-w/2,y=-h/2;
   s.lineTo(x+r,y+h); s.quadraticCurveTo(x,y+h,x,y+h-r);
   s.lineTo(x,y+r); s.quadraticCurveTo(x,y,x+r,y); return s; }
 
-const STATE_COL={ white:0xcdd6e4, silver:0x9fb2c8, gold:0xe6c24a, emerald:0x39c98a, cosmic:0x7c5cff };
-const STATES=Object.keys(STATE_COL);
+// ─── ICÔNES (portées de v58, viewBox 0 0 90 90) — seul critère de fusion ───
+const ICO={
+ chevron:{d:'M20 32L45 12L70 32',t:'path'},
+ circle:{d:'45,22,12',t:'circle'},
+ line:{d:'15,22,75,22',t:'line'},
+ wave:{d:'M 29 22 Q 29 12 37 12 Q 45 12 45 22 Q 45 32 53 32 Q 61 32 61 22 Q 61 12 53 12 Q 45 12 45 22 Q 45 32 37 32 Q 29 32 29 22 Z',t:'path'}
+};
+const ICONS=Object.keys(ICO);          // 4 icônes : chevron/wave/line/circle
+const ICON_COL='rgba(205,214,228,0.95)';
 
-function makeCell(state){
+function icoSVG(name){ const d=ICO[name]; if(!d)return'';
+ if(d.t==='path')  return `<path class="i" d="${d.d}"/>`;
+ if(d.t==='circle'){const[cx,cy,r]=d.d.split(',');return `<circle class="i" cx="${cx}" cy="${cy}" r="${r}"/>`;}
+ if(d.t==='line')  {const[x1,y1,x2,y2]=d.d.split(',');return `<line class="i" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;}
+ return''; }
+
+// Texture d'un domino : dalle noire arrondie + icône centrée. Pas d'état, pas de couleur.
+const _texCache={};
+function getDominoTex(icon){
+ if(_texCache[icon]) return _texCache[icon];
+ const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 90 90">
+  <style>.i{stroke:${ICON_COL};stroke-width:5;stroke-linecap:round;stroke-linejoin:round;fill:none;}</style>
+  <g transform="translate(0,23) scale(1,1.45)">${icoSVG(icon)}</g></svg>`;
+ const S=256, cv=document.createElement('canvas'); cv.width=S; cv.height=S;
+ const ctx=cv.getContext('2d');
+ const tex=new THREE.CanvasTexture(cv); tex.needsUpdate=false;
+ const blob=new Blob([svg],{type:'image/svg+xml;charset=utf-8'});
+ const url=URL.createObjectURL(blob);
+ const img=new Image();
+ img.onload=()=>{ const m=4,rd=36;
+  ctx.fillStyle='rgba(0,0,0,0.95)';
+  ctx.beginPath();ctx.moveTo(m+rd,m);ctx.lineTo(S-m-rd,m);ctx.quadraticCurveTo(S-m,m,S-m,m+rd);ctx.lineTo(S-m,S-m-rd);ctx.quadraticCurveTo(S-m,S-m,S-m-rd,S-m);ctx.lineTo(m+rd,S-m);ctx.quadraticCurveTo(m,S-m,m,S-m-rd);ctx.lineTo(m,m+rd);ctx.quadraticCurveTo(m,m,m+rd,m);ctx.closePath();ctx.fill();
+  ctx.drawImage(img,m+2,m+2,S-m*2-4,S-m*2-4);
+  tex.needsUpdate=true;URL.revokeObjectURL(url); };
+ img.src=url; _texCache[icon]=tex; return tex;
+}
+
+// makeCell(v) : v est soit une icône (domino), soit '#' (mur). Retourne un groupe.
+function makeCell(v){
   const g=new THREE.Group();
-  // hitbox invisible : calée sur la matière visible (+ fine marge), pas sur toute la case,
-  // pour qu'elle ne déborde pas sur le carré voisin (sinon le haut attrape celui du dessus).
   const HIT=SZ+0.04;
   const hit=new THREE.Mesh(new THREE.PlaneGeometry(HIT,HIT),
     new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false}));
   hit.position.z=-0.001; g.add(hit);
-  // corps
-  const body=new THREE.Mesh(new THREE.ShapeGeometry(rrShape(SZ,SZ,RR)),
-    new THREE.MeshBasicMaterial({color:STATE_COL[state],transparent:true,opacity:0.92}));
-  g.add(body);
-  // liseré (anneau)
+  if(v==='#'){
+    // MUR : dalle de pierre arrondie, mate, sans icône.
+    const body=new THREE.Mesh(new THREE.ShapeGeometry(rrShape(SZ,SZ,RR)),
+      new THREE.MeshBasicMaterial({color:0x2a2c34,transparent:true,opacity:0.96}));
+    g.add(body);
+    const frame=new THREE.Shape(); rrShape(SZ,SZ,RR).getPoints(40).forEach((p,i)=>i?frame.lineTo(p.x,p.y):frame.moveTo(p.x,p.y));
+    frame.holes.push(rrShape(SZ-2*EDGE_W,SZ-2*EDGE_W,Math.max(0.01,RR-EDGE_W)));
+    g.add(new THREE.Mesh(new THREE.ShapeGeometry(frame),
+      new THREE.MeshBasicMaterial({color:0x55596a,transparent:true,opacity:0.8})));
+    return g;
+  }
+  // DOMINO : plan texturé (icône) — l'icône est le seul critère de fusion.
+  const face=new THREE.Mesh(new THREE.PlaneGeometry(SZ,SZ),
+    new THREE.MeshBasicMaterial({map:getDominoTex(v),transparent:true}));
+  g.add(face);
   const frame=new THREE.Shape(); rrShape(SZ,SZ,RR).getPoints(40).forEach((p,i)=>i?frame.lineTo(p.x,p.y):frame.moveTo(p.x,p.y));
   frame.holes.push(rrShape(SZ-2*EDGE_W,SZ-2*EDGE_W,Math.max(0.01,RR-EDGE_W)));
   g.add(new THREE.Mesh(new THREE.ShapeGeometry(frame),
@@ -83,10 +126,14 @@ function buildBoards(){
     faceGroup.position.set(0, Math.sin(ang)*RADIUS, Math.cos(ang)*RADIUS);  // +Z en façade
     prism.add(faceGroup);
 
-    // remplissage ÉPARS : ~45% de cases occupées, réparties (pas tassées) →
-    // la poussée a du sens (vides à combler, files à déplacer, bords où tomber).
+    // LABYRINTHE : murs épars (~18%) + dominos à icônes (~40%) ; le reste vide.
+    // Le board contient : une icône (domino), '#' (mur fixe), ou null (couloir).
     const state=new Array(TOTAL).fill(null);
-    for(let k=0;k<TOTAL;k++){ if(Math.random()<0.45) state[k]=STATES[Math.floor(Math.random()*3)]; }
+    for(let k=0;k<TOTAL;k++){
+      const rnd=Math.random();
+      if(rnd<0.18) state[k]='#';                                       // mur
+      else if(rnd<0.58) state[k]=ICONS[Math.floor(Math.random()*ICONS.length)]; // domino
+    }
     boards.push(state);
     renderBoard(f,faceGroup);
   }
@@ -118,73 +165,106 @@ function renderBoard(f,faceGroup,extraCol,extraSide){
   faceGroup.add(holder); cellMeshes[f]=holder;
 }
 
-// ─── DÉROULÉ : bouger un bloc fait AVANCER le plateau d'un cran vers la gauche ──
-// 1) glisser un bloc sur une case voisine libre ;
-// 2) tout le plateau glisse d'1 colonne vers la GAUCHE (colonne 0 sort du cadre) ;
-// 3) une nouvelle colonne est générée à droite.
-const DELTA={ left:{dc:-1,dr:0}, right:{dc:1,dr:0}, up:{dc:0,dr:-1}, down:{dc:0,dr:1} };
-function inBounds(c,r){ return c>=0&&c<COLS&&r>=0&&r<ROWS; }
-
-function newColumn(){
-  const col=new Array(ROWS).fill(null);
-  for(let r=0;r<ROWS;r++){ if(Math.random()<0.45) col[r]=STATES[Math.floor(Math.random()*3)]; }
-  return col;
+function randCell(){
+  const rnd=Math.random();
+  if(rnd<0.18) return '#';
+  if(rnd<0.58) return ICONS[Math.floor(Math.random()*ICONS.length)];
+  return null;
 }
-function newLine(){
-  const line=new Array(COLS).fill(null);
-  for(let c=0;c<COLS;c++){ if(Math.random()<0.45) line[c]=STATES[Math.floor(Math.random()*3)]; }
-  return line;
-}
+function newColumn(){ const col=new Array(ROWS).fill(null); for(let r=0;r<ROWS;r++) col[r]=randCell(); return col; }
+function newLine(){  const line=new Array(COLS).fill(null); for(let c=0;c<COLS;c++) line[c]=randCell(); return line; }
 
-// glisse le bloc i d'une case dans dir (si voisine libre). Retourne true si déplacé.
-function moveBlock(f,i,dir){
-  const b=boards[f]; if(!b[i])return false;
-  const {dc,dr}=DELTA[dir];
-  const c=i%COLS+dc, r=Math.floor(i/COLS)+dr;
-  if(!inBounds(c,r) || b[r*COLS+c]) return false;   // hors cadre ou occupée
-  b[r*COLS+c]=b[i]; b[i]=null; return true;
-}
+// ─── helpers labyrinthe ────────────────────────────────────────────────────
+const isWall =v=>v==='#';
+const isDomino=v=>v!=null && v!=='#';
 
-// POUSSÉE horizontale type domino, sur la ligne de i, dans dir ('left'/'right').
-// Pousse i + tous les blocs collés devant lui d'une case. Bloque seulement si le
-// bloc le plus avancé touche le bord. Retourne la liste des index déplacés (from→to)
-// pour pouvoir les animer, ou null si rien ne peut bouger.
-function pushRow(f,i,dir){
+// ─── GRAVITÉ : tous les dominos tombent dans le sens 'grav' jusqu'à buter ────
+// (mur, autre domino arrêté, ou bord). Les murs ne bougent JAMAIS.
+// grav ∈ 'down'/'up'/'left'/'right'. Retourne la liste {from,to} des dominos déplacés.
+function applyGravity(f,grav){
   const b=boards[f];
-  const row=Math.floor(i/COLS), step=(dir==='right')?1:-1;
-  let col=i%COLS;
-  // remonte la file de blocs contigus dans le sens de poussée jusqu'au premier vide ou au bord
-  const chain=[];                 // colonnes occupées formant la file, de i vers l'avant
-  let c=col;
-  while(c>=0 && c<COLS && b[row*COLS+c]){ chain.push(c); c+=step; }
-  // c = première case après la file. Si hors cadre → file collée au bord, rien ne bouge.
-  if(c<0 || c>=COLS) return null;
-  // déplace chaque bloc de la file d'une case vers l'avant, en partant du plus avancé.
   const moves=[];
-  for(let k=chain.length-1;k>=0;k--){
-    const from=row*COLS+chain[k], to=row*COLS+chain[k]+step;
-    b[to]=b[from]; b[from]=null;
-    moves.push({from,to});
-  }
-  return moves;                   // ordre : du plus avancé au plus arrière
-}
-
-// POUSSÉE verticale type domino, sur la colonne de i, dans dir ('up'/'down').
-// up → vers le haut (row décroissant) ; down → vers le bas (row croissant).
-function pushCol(f,i,dir){
-  const b=boards[f];
-  const col=i%COLS, step=(dir==='down')?1:-1;
-  const chain=[];
-  let r=Math.floor(i/COLS);
-  while(r>=0 && r<ROWS && b[r*COLS+col]){ chain.push(r); r+=step; }
-  if(r<0 || r>=ROWS) return null;     // file collée au bord
-  const moves=[];
-  for(let k=chain.length-1;k>=0;k--){
-    const from=chain[k]*COLS+col, to=(chain[k]+step)*COLS+col;
-    b[to]=b[from]; b[from]=null;
-    moves.push({from,to});
+  const horizontal=(grav==='left'||grav==='right');
+  if(horizontal){
+    const step=(grav==='right')?-1:1;     // on parcourt depuis le bord d'arrivée
+    for(let r=0;r<ROWS;r++){
+      // case d'atterrissage courante, en partant du bord vers lequel ça tombe
+      let target=(grav==='right')?COLS-1:0;
+      const order=[];
+      if(grav==='right'){ for(let c=COLS-1;c>=0;c--) order.push(c); }
+      else              { for(let c=0;c<COLS;c++)   order.push(c); }
+      for(const c of order){ const i=r*COLS+c; const v=b[i];
+        if(isWall(v)){ target=c+step; continue; }      // mur : reset l'atterrissage juste après
+        if(isDomino(v)){
+          if(c!==target){ b[r*COLS+target]=v; b[i]=null; moves.push({from:i,to:r*COLS+target}); }
+          target+=step;
+        }
+      }
+    }
+  } else {
+    const step=(grav==='down')?-1:1;
+    for(let c=0;c<COLS;c++){
+      let target=(grav==='down')?ROWS-1:0;
+      const order=[];
+      if(grav==='down'){ for(let r=ROWS-1;r>=0;r--) order.push(r); }
+      else             { for(let r=0;r<ROWS;r++)    order.push(r); }
+      for(const r of order){ const i=r*COLS+c; const v=b[i];
+        if(isWall(v)){ target=r+step; continue; }
+        if(isDomino(v)){
+          if(r!==target){ b[target*COLS+c]=v; b[i]=null; moves.push({from:i,to:target*COLS+c}); }
+          target+=step;
+        }
+      }
+    }
   }
   return moves;
+}
+
+// ─── FUSION (icône seule, sans état) : cascade v58 dégraissée ───────────────
+// Priorité : CHAÎNE à 3 (centre matché des 2 côtés) → FUSION simple (2 adjacents)
+//            → AIMANT (paire séparée par couloir vide).
+// Une fusion fait TOUJOURS perdre un domino : le survivant reste tel quel.
+// Retourne un objet décrivant la fusion à animer, ou null si rien.
+function neigh(b,i,dir){ const c=i%COLS,r=Math.floor(i/COLS);
+  if(dir==='left') return c>0?i-1:-1;
+  if(dir==='right')return c<COLS-1?i+1:-1;
+  if(dir==='up')   return r>0?i-COLS:-1;
+  if(dir==='down') return r<ROWS-1?i+COLS:-1;
+  return -1; }
+
+// couloir vide (que des null) entre deux index alignés
+function corridorEmpty(b,i1,i2,horizontal){
+  if(horizontal){ const y=Math.floor(i1/COLS); for(let c=(i1%COLS)+1;c<i2%COLS;c++){ if(b[y*COLS+c]!=null)return false; } }
+  else { const x=i1%COLS; for(let r=Math.floor(i1/COLS)+1;r<Math.floor(i2/COLS);r++){ if(b[r*COLS+x]!=null)return false; } }
+  return true;
+}
+
+function findFusion(f){
+  const b=boards[f];
+  // 1) CHAÎNE à 3 : un centre dont les deux opposés portent la même icône que lui.
+  for(let i=0;i<TOTAL;i++){ const c=b[i]; if(!isDomino(c))continue;
+    const x=i%COLS,y=Math.floor(i/COLS);
+    if(x>0&&x<COLS-1){ const L=b[i-1],R=b[i+1];
+      if(L===c&&R===c) return {type:'chain',axis:'h',center:i,a:i-1,bb:i+1}; }
+    if(y>0&&y<ROWS-1){ const T=b[i-COLS],B=b[i+COLS];
+      if(T===c&&B===c) return {type:'chain',axis:'v',center:i,a:i-COLS,bb:i+COLS}; }
+  }
+  // 2) FUSION simple : deux dominos adjacents même icône.
+  for(let i=0;i<TOTAL;i++){ const c=b[i]; if(!isDomino(c))continue;
+    const R=neigh(b,i,'right'); if(R!==-1&&b[R]===c) return {type:'simple',axis:'h',a:i,bb:R};
+    const D=neigh(b,i,'down');  if(D!==-1&&b[D]===c) return {type:'simple',axis:'v',a:i,bb:D};
+  }
+  // 3) AIMANT : paire même icône séparée par couloir vide (même ligne ou colonne).
+  for(let i=0;i<TOTAL;i++){ const c=b[i]; if(!isDomino(c))continue;
+    const x=i%COLS,y=Math.floor(i/COLS);
+    for(let c2=x+1;c2<COLS;c2++){ const j=y*COLS+c2; const v=b[j]; if(v==null)continue;
+      if(v===c && corridorEmpty(b,i,j,true)) return {type:'magnet',axis:'h',a:i,bb:j};
+      break; }                                   // 1er obstacle non-vide → stop ce sens
+    for(let r2=y+1;r2<ROWS;r2++){ const j=r2*COLS+x; const v=b[j]; if(v==null)continue;
+      if(v===c && corridorEmpty(b,i,j,false)) return {type:'magnet',axis:'v',a:i,bb:j};
+      break; }
+  }
+  return null;
 }
 
 // commit logique du défilement, selon le sens.
@@ -244,92 +324,94 @@ function fit(){
 }
 addEventListener('resize',fit);
 
-// ─── entrées : saisir un bloc + swipe = direction de poussée ───────────────
-// pointerdown détermine la case saisie ; pointerup donne la direction (4 sens).
-const raycaster=new THREE.Raycaster(), ndc=new THREE.Vector2();
-function pickCell(px,py){
-  const r=canvas.getBoundingClientRect();
-  ndc.x=((px-r.left)/r.width)*2-1; ndc.y=-((py-r.top)/r.height)*2+1;
-  raycaster.setFromCamera(ndc,camera);
-  const holder=cellMeshes[current]; if(!holder) return -1;
-  // Raycast DIRECT sur les cellules de la face active → exact, insensible au décalage caméra.
-  const hits=raycaster.intersectObjects(holder.children,true);
-  if(!hits.length) return -1;
-  // remonte jusqu'au groupe-cellule qui porte userData.idx
-  let o=hits[0].object;
-  while(o && o.userData.idx===undefined){ o=o.parent; }
-  return (o && o.userData.idx!==undefined) ? o.userData.idx : -1;
-}
-let grabIdx=-1, sx=0, sy=0, grabMesh=null;
-function setGrab(idx){
-  grabMesh=null;
-  const holder=cellMeshes[current]; if(!holder)return;
-  const m=holder.children.find(ch=>ch.userData.idx===idx);
-  if(m){ grabMesh=m; m.position.z=0.06; m.scale.set(1.08,1.08,1); }  // feedback instantané
-}
-function releaseGrab(){
-  if(grabMesh){ grabMesh.position.z=0.01; grabMesh.scale.set(1,1,1); grabMesh=null; }
-}
-canvas.addEventListener('pointerdown',e=>{ sx=e.clientX; sy=e.clientY; grabIdx=pickCell(e.clientX,e.clientY); if(grabIdx>=0&&!sliding&&!movingBlock)setGrab(grabIdx); });
+// ─── entrées : SWIPE = sens de la gravité (4 sens) ─────────────────────────
+// Le labyrinthe « bascule » dans le sens du swipe → tous les dominos glissent
+// jusqu'à buter (mur / domino / bord), puis les fusions s'enchaînent.
+let sx=0, sy=0, downAt=0;
+canvas.addEventListener('pointerdown',e=>{ sx=e.clientX; sy=e.clientY; downAt=performance.now(); });
 canvas.addEventListener('pointerup',e=>{
-  releaseGrab();
-  if(grabIdx<0){ grabIdx=-1; return; }
-  const dx=e.clientX-sx, dy=e.clientY-sy, TH=12;
-  if(Math.abs(dx)<TH && Math.abs(dy)<TH){ grabIdx=-1; return; } // pas de swipe → rien
-  // 4 sens : l'axe dominant décide. Horizontal → pushRow ; vertical → pushCol.
-  // ATTENTION : en écran, y vers le bas est positif → dy>0 = swipe vers le bas.
-  let dir;
-  if(Math.abs(dx)>=Math.abs(dy)){ dir = dx<0 ? 'left' : 'right'; }
-  else { dir = dy<0 ? 'up' : 'down'; }
-  // POUSSÉE domino : le bloc saisi pousse la file devant lui. Aucune condition de case
-  // libre — ça ne bloque que si la file touche déjà le bord.
-  if(!sliding && !movingBlock){
-    const moves=(dir==='up'||dir==='down') ? pushCol(current,grabIdx,dir)
-                                           : pushRow(current,grabIdx,dir);
-    if(moves) startPush(current, moves, dir);          // anime la file puis défile
-  }
-  grabIdx=-1;
+  const dx=e.clientX-sx, dy=e.clientY-sy, TH=24;
+  if(busy) return;                                   // une cascade tourne déjà
+  if(Math.abs(dx)<TH && Math.abs(dy)<TH) return;     // pas de swipe net
+  let grav;
+  if(Math.abs(dx)>=Math.abs(dy)){ grav = dx<0 ? 'left' : 'right'; }
+  else { grav = dy<0 ? 'up' : 'down'; }              // écran : dy>0 = vers le bas
+  startGravity(current, grav);
 });
-canvas.addEventListener('pointercancel',()=>{ releaseGrab(); grabIdx=-1; });
 
-// ─── animation de la POUSSÉE (toute la file glisse d'une case) ───────────────
-let movingBlock=null;   // { face, dir, items:[{mesh,from:{x,y},to:{x,y}}], t }
-const MOVE_DUR=0.14, SLIDE_DUR=0.34, TILT_DUR=0.30;   // bloc vif, défilement plus lent → mouvements distincts
+// ─── ANIMATION DE GLISSEMENT (déplacement de meshes from→to) ───────────────
+const MOVE_DUR=0.16, FUSE_DUR=0.16, TILT_DUR=0.30;
+let busy=false;                                       // verrou pendant une cascade
+let anim=null;   // { kind:'move'|'fuse', items:[{mesh,from:{x,y},to:{x,y}}], t, after }
 let lastT=0;
-// moves = liste {from,to} renvoyée par pushRow (board DÉJÀ à jour). On anime les meshes
-// depuis leur position d'origine vers la nouvelle, puis on enchaîne le défilement.
-function startPush(f, moves, dir){
+
+function meshAt(holder,idx){ return holder.children.find(ch=>ch.userData.idx===idx); }
+
+// Anime une liste de mouvements {from,to} (board DÉJÀ à jour), puis appelle `after`.
+function animateMoves(f, moves, after){
   const holder=cellMeshes[f];
-  if(!holder || !moves || !moves.length){ startSlide(f,dir); return; }
+  if(!holder || !moves || !moves.length){ after&&after(); return; }
   const items=[];
   for(const mv of moves){
-    const mesh=holder.children.find(ch=>ch.userData.idx===mv.from);
-    if(!mesh) continue;
-    mesh.userData.idx=mv.to;                         // recale l'index logique du mesh
-    mesh.position.z=0.04;
+    const mesh=meshAt(holder,mv.from); if(!mesh) continue;
+    mesh.userData.idx=mv.to; mesh.position.z=0.04;
     const a=cellToLocal(mv.from%COLS,Math.floor(mv.from/COLS));
     const b=cellToLocal(mv.to%COLS,Math.floor(mv.to/COLS));
     items.push({mesh,from:{x:a.x,y:a.y},to:{x:b.x,y:b.y}});
   }
-  if(!items.length){ startSlide(f,dir); return; }
-  movingBlock={ face:f, dir, items, t:0 };
+  if(!items.length){ after&&after(); return; }
+  anim={ kind:'move', dur:MOVE_DUR, items, t:0, after };
 }
 
-// ─── animation du défilement (glissement doux, sens = celui du déplacement) ──
-let sliding=false, slideX=0, slideFresh=null, slideFace=0, slideT=0, slideDir='left';
-function startSlide(f,dir){
-  slideDir=dir||'left';
+// ─── CASCADE : gravité → fusion → gravité → … jusqu'à stabilité, puis défile ─
+function startGravity(f, grav){
+  busy=true;
+  const moves=applyGravity(f, grav);
+  animateMoves(f, moves, ()=>{ renderBoard(f, prism.children[f]); resolveFusions(f, grav); });
+}
+
+function resolveFusions(f, grav){
+  const fu=findFusion(f);
+  if(!fu){ endCascade(f, grav); return; }
+  const b=boards[f];
+  // Le SURVIVANT : pour chaîne, c'est le centre ; pour simple/aimant, c'est `a`.
+  const survivor = (fu.type==='chain') ? fu.center : fu.a;
+  const losers   = (fu.type==='chain') ? [fu.a, fu.bb] : [fu.bb];
+  // anime les perdants qui glissent vers le survivant (aimant : trajet long ; sinon court)
+  const holder=cellMeshes[f];
+  const items=[];
+  const sLoc=cellToLocal(survivor%COLS,Math.floor(survivor/COLS));
+  for(const L of losers){
+    const mesh=meshAt(holder,L); if(!mesh) continue;
+    const a=cellToLocal(L%COLS,Math.floor(L/COLS));
+    items.push({mesh,from:{x:a.x,y:a.y},to:{x:sLoc.x,y:sLoc.y},fade:true});
+  }
+  // applique la fusion au board : les perdants disparaissent (on perd un domino)
+  for(const L of losers) b[L]=null;
+  anim={ kind:'fuse', dur:FUSE_DUR, items, t:0, after:()=>{
+    renderBoard(f, prism.children[f]);
+    // après une fusion, des vides sont apparus → re-gravité puis on recherche encore
+    const mv=applyGravity(f, grav);
+    animateMoves(f, mv, ()=>{ renderBoard(f, prism.children[f]); resolveFusions(f, grav); });
+  }};
+}
+
+// Fin de cascade : le labyrinthe défile d'un cran dans le sens de la gravité,
+// une bande neuve entre par l'opposé. Puis on relâche le verrou.
+function endCascade(f, grav){
+  startSlide(f, grav, ()=>{ busy=false; });
+}
+
+// ─── DÉFILEMENT (tapis roulant) — sens = celui de la gravité ───────────────
+let sliding=false, slideFresh=null, slideFace=0, slideT=0, slideDir='down', slideAfter=null;
+function startSlide(f,dir,after){
+  slideDir=dir||'down'; slideAfter=after||null;
   const vertical=(slideDir==='up'||slideDir==='down');
   let side;
-  if(vertical){
-    slideFresh=newLine();
-    side=(slideDir==='down')?'top':'bottom';        // ligne neuve à l'opposé du défilement
-  } else {
-    slideFresh=newColumn();
-    side=(slideDir==='right')?'left':'right';        // colonne neuve à l'opposé
-  }
+  if(vertical){ slideFresh=newLine();  side=(slideDir==='down')?'top':'bottom'; }
+  else        { slideFresh=newColumn(); side=(slideDir==='right')?'left':'right'; }
   renderBoard(f, prism.children[f], slideFresh, side);
-  slideX=0; slideT=0; slideFace=f; sliding=true;
+  slideT=0; slideFace=f; sliding=true;
 }
 
 // ─── boucle ────────────────────────────────────────────────────────────────
@@ -339,43 +421,36 @@ function animate(now){
   if(animating){
     tiltT += dt/TILT_DUR;
     const tt=tiltT>=1?1:tiltT;
-    const e=1-Math.pow(1-tt,3);                       // easeOutCubic
+    const e=1-Math.pow(1-tt,3);
     prismAngle = tiltFrom+(targetAngle-tiltFrom)*e;
     if(tiltT>=1){ prismAngle=targetAngle; animating=false; }
     prism.rotation.x=prismAngle;
   }
-  if(movingBlock){
-    const mb=movingBlock; mb.t += dt/MOVE_DUR;
-    const tt=mb.t>=1?1:mb.t;
-    const e=1-Math.pow(1-tt,3);                       // easeOutCubic
-    for(const it of mb.items){
+  if(anim){
+    anim.t += dt/anim.dur;
+    const tt=anim.t>=1?1:anim.t;
+    const e=1-Math.pow(1-tt,3);
+    for(const it of anim.items){
       it.mesh.position.x = it.from.x+(it.to.x-it.from.x)*e;
       it.mesh.position.y = it.from.y+(it.to.y-it.from.y)*e;
+      if(it.fade){ it.mesh.traverse(o=>{ if(o.material&&o.material.opacity!==undefined){ o.material.transparent=true; o.material.opacity=Math.max(0,1-tt); } }); }
     }
-    if(mb.t>=1){
-      const f=mb.face, dir=mb.dir;
-      movingBlock=null;
-      startSlide(f, dir);                              // board déjà à jour → défilement enchaîne
-    }
+    if(anim.t>=1){ const after=anim.after; anim=null; after&&after(); }
   }
   if(sliding){
-    slideT += dt/SLIDE_DUR;
+    slideT += dt/MOVE_DUR/2.2;
     const tt=slideT>=1?1:slideT;
-    const e=1-Math.pow(1-tt,3);                       // easeOutCubic
+    const e=1-Math.pow(1-tt,3);
     const vertical=(slideDir==='up'||slideDir==='down');
     const holder=cellMeshes[slideFace];
-    if(vertical){
-      const sign=(slideDir==='down')?-1:1;           // bas → vers -y ; haut → +y
-      if(holder){ holder.position.y = sign*CELL_W*e; holder.position.x = 0; }
-    } else {
-      const sign=(slideDir==='right')?1:-1;          // droite → +x ; gauche → -x
-      if(holder){ holder.position.x = sign*CELL_W*e; holder.position.y = 0; }
-    }
-    if(slideT>=1){                                    // fin du glissement
+    if(vertical){ const sign=(slideDir==='down')?-1:1; if(holder){ holder.position.y=sign*CELL_W*e; holder.position.x=0; } }
+    else        { const sign=(slideDir==='right')?1:-1; if(holder){ holder.position.x=sign*CELL_W*e; holder.position.y=0; } }
+    if(slideT>=1){
       commitScroll(slideFace, slideFresh, slideDir);
-      if(holder){ holder.position.x = 0; holder.position.y = 0; }
+      if(holder){ holder.position.x=0; holder.position.y=0; }
       renderBoard(slideFace, prism.children[slideFace]);
       sliding=false; slideFresh=null;
+      const after=slideAfter; slideAfter=null; after&&after();
     }
   }
   renderer.render(scene,camera);
