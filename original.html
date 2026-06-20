@@ -31,7 +31,7 @@ const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 renderer.setClearColor(0x07080f);
 const scene=new THREE.Scene();
-const camera=new THREE.PerspectiveCamera(42,1,0.1,200);
+const camera=new THREE.OrthographicCamera(-1,1,1,-1,0.1,200);
 scene.add(new THREE.AmbientLight(0xffffff,0.95));
 const dir=new THREE.DirectionalLight(0xffffff,0.35); dir.position.set(0,2,4); scene.add(dir);
 
@@ -69,10 +69,12 @@ const boards=[];   // boards[f][i] = state | null
 function buildBoards(){
   for(let f=0;f<NFACES;f++){
     const faceGroup=new THREE.Group();
-    // place la face sur le prisme : rotation autour de X puis poussée vers l'extérieur
-    const ang=f*FACE_ANG;
-    faceGroup.rotation.x=ang;
-    faceGroup.position.set(0, Math.cos(ang)*RADIUS, Math.sin(ang)*RADIUS);
+    // Prisme basculant autour de X. La face ACTIVE doit être en façade (+Z), centrée Y=0,
+    // et parfaitement face caméra. On part donc de l'angle 0 = façade, et on monte les autres
+    // faces au-dessus (elles redescendront vers toi à la bascule).
+    const ang=f*FACE_ANG;                      // f=0 → façade ; f=1 → au-dessus ; etc.
+    faceGroup.rotation.x=-ang;                 // incline la face pour qu'elle suive le prisme
+    faceGroup.position.set(0, Math.sin(ang)*RADIUS, Math.cos(ang)*RADIUS);  // +Z en façade
     // léger fond de plateau
     const back=new THREE.Mesh(new THREE.PlaneGeometry(FACE_W+0.1,FACE_H+0.1),
       new THREE.MeshBasicMaterial({color:0x121426,transparent:true,opacity:0.55}));
@@ -116,26 +118,25 @@ let prismAngle=0, targetAngle=0, animating=false;
 function tilt(dir){            // dir>0 : plateau du HAUT descend vers toi
   if(animating)return;
   current=((current+dir)%NFACES+NFACES)%NFACES;
-  targetAngle -= dir*FACE_ANG; // le groupe tourne en sens inverse pour amener la face
+  targetAngle += dir*FACE_ANG; // tourne le prisme pour amener la face du dessus en façade
   animating=true;
 }
 
-// ─── caméra paysage plein écran ────────────────────────────────────────────
+// ─── caméra paysage plein écran (ORTHOGRAPHIQUE → plat garanti, zéro déformation) ───
 function fit(){
   const w=innerWidth,h=innerHeight,aspect=w/h;
-  renderer.setSize(w,h); camera.aspect=aspect;
-  const vFOV=camera.fov*Math.PI/180;
-  // PAYSAGE : la HAUTEUR est la ressource rare → on cadre sur elle seule.
-  // Les 4 rangées remplissent l'écran de haut en bas ; la grille étant carrée,
-  // elle reste centrée en largeur sans déborder.
-  const needH=(FACE_H*1.02)/(2*Math.tan(vFOV/2));
-  const dist=needH+RADIUS;
-  // coller la grille en BAS : viser SOUS le centre (lookY<0 → la grille descend dans le cadre)
-  const worldPerPx=(2*dist*Math.tan(vFOV/2))/h;
-  const halfBoardPx=(FACE_H/2)/worldPerPx;          // demi-hauteur grille en pixels
-  const lookY = -(h/2 - halfBoardPx)*worldPerPx;     // bord bas de la grille ≈ bord bas écran
-  camera.position.set(0, lookY, dist);
-  camera.lookAt(0, lookY, 0); camera.updateProjectionMatrix();
+  renderer.setSize(w,h);
+  // On veut que la HAUTEUR du plateau remplisse la hauteur écran (léger air en haut).
+  const halfH=(FACE_H*1.02)/2;               // demi-hauteur monde visible
+  const halfW=halfH*aspect;                  // largeur déduite de l'aspect (paysage → large)
+  camera.left=-halfW; camera.right=halfW;
+  camera.top=halfH;   camera.bottom=-halfH;
+  // coller la grille en BAS : le centre du plateau actif est en Y≈0.
+  // On décale la caméra vers le bas pour que le bord bas de la grille touche le bas écran.
+  const lowGap=halfH-(FACE_H/2);             // air total vertical (monde)
+  camera.position.set(0, -lowGap, 50);       // viser plus bas → grille descend, collée en bas
+  camera.lookAt(0, -lowGap, 0);
+  camera.updateProjectionMatrix();
 }
 addEventListener('resize',fit);
 
