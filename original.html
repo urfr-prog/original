@@ -199,10 +199,9 @@ canvas.addEventListener('pointerup',e=>{
   releaseGrab();
   if(grabIdx<0){ grabIdx=-1; return; }
   const dx=e.clientX-sx, dy=e.clientY-sy, TH=12;
-  if(Math.abs(dx)<TH && Math.abs(dy)<TH){ grabIdx=-1; return; }   // simple tap → rien
-  let dir;
-  if(Math.abs(dx)>Math.abs(dy)) dir = dx<0 ? 'left':'right';
-  else                          dir = dy<0 ? 'up':'down';
+  if(Math.abs(dx)<TH){ grabIdx=-1; return; }            // pas de swipe horizontal → rien
+  // swipe vers la DROITE → bloc va à GAUCHE ; swipe vers la GAUCHE → bloc va à DROITE.
+  const dir = dx>0 ? 'left' : 'right';
   // si la case voisine est libre : on ANIME d'abord le bloc vers elle, puis le plateau défile.
   if(!sliding && !movingBlock){
     const {dc,dr}=DELTA[dir];
