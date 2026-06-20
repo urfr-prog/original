@@ -168,10 +168,17 @@ function pickCell(px,py){
   const r=canvas.getBoundingClientRect();
   ndc.x=((px-r.left)/r.width)*2-1; ndc.y=-((py-r.top)/r.height)*2+1;
   raycaster.setFromCamera(ndc,camera);
-  // La face active au repos est en façade à z=RADIUS (repère monde), plan normal +Z.
+  // On vise le PLAN de la face active, où qu'elle soit (suit la bascule du prisme).
+  const faceGroup=prism.children[current]; if(!faceGroup) return -1;
+  faceGroup.updateMatrixWorld(true);
+  // Normale et origine du plan de la face en coordonnées MONDE.
+  const n=new THREE.Vector3(0,0,1).transformDirection(faceGroup.matrixWorld).normalize();
+  const o=new THREE.Vector3().setFromMatrixPosition(faceGroup.matrixWorld);
+  const plane=new THREE.Plane().setFromNormalAndCoplanarPoint(n,o);
   const pt=new THREE.Vector3();
-  raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,0,1),-RADIUS),pt);
-  if(!pt)return -1;
+  if(!raycaster.ray.intersectPlane(plane,pt)) return -1;
+  // Repasse le point d'impact en coordonnées LOCALES de la face → x,y de la grille.
+  faceGroup.worldToLocal(pt);
   const col=Math.round(pt.x/CELL_W+(COLS-1)/2);
   const row=Math.round((ROWS-1)/2-pt.y/CELL_W);
   if(col<0||col>=COLS||row<0||row>=ROWS)return -1;
