@@ -216,12 +216,12 @@ canvas.addEventListener('pointercancel',()=>{ releaseGrab(); grabIdx=-1; });
 
 // ─── animation du BLOC déplacé (on voit la pièce glisser vers sa voisine) ────
 let movingBlock=null;   // { face, fromIdx, toIdx, mesh, t, from:{x,y}, to:{x,y} }
-const MOVE_DUR=0.16, SLIDE_DUR=0.20, TILT_DUR=0.30;   // durées (s) — courtes = vif
+const MOVE_DUR=0.14, SLIDE_DUR=0.34, TILT_DUR=0.30;   // bloc vif, défilement plus lent → mouvements distincts
 let lastT=0;
 function startBlockMove(f, fromIdx, toIdx, dir){
-  const holder=cellMeshes[f]; if(!holder){ moveBlock(f,fromIdx,dir); renderBoard(f,prism.children[f]); return; }
+  const holder=cellMeshes[f]; if(!holder){ moveBlock(f,fromIdx,dir); startSlide(f); return; }
   const mesh=holder.children.find(ch=>ch.userData.idx===fromIdx);
-  if(!mesh){ moveBlock(f,fromIdx,dir); renderBoard(f,prism.children[f]); return; }
+  if(!mesh){ moveBlock(f,fromIdx,dir); startSlide(f); return; }
   mesh.scale.set(1,1,1); mesh.position.z=0.04;        // bloc en mouvement reste légèrement au-dessus
   const a=cellToLocal(fromIdx%COLS,Math.floor(fromIdx/COLS));
   const b=cellToLocal(toIdx%COLS,Math.floor(toIdx/COLS));
@@ -257,7 +257,7 @@ function animate(now){
     if(mb.t>=1){
       moveBlock(mb.face, mb.fromIdx, mb.dir);          // commit logique du déplacement
       movingBlock=null;
-      renderBoard(mb.face, prism.children[mb.face]);    // redessine à la position propre
+      startSlide(slideFace=mb.face);                   // puis le plateau défile (vitesse différente)
     }
   }
   if(sliding){
