@@ -81,13 +81,10 @@ function buildBoards(){
     back.position.z=-0.02; faceGroup.add(back);
     prism.add(faceGroup);
 
-    // contenu aléatoire pour avoir de la matière
+    // remplissage ÉPARS : ~45% de cases occupées, réparties (pas tassées) →
+    // la poussée a du sens (vides à combler, files à déplacer, bords où tomber).
     const state=new Array(TOTAL).fill(null);
-    for(let c=0;c<COLS;c++){
-      const n=2+Math.floor(Math.random()*3);   // 2 à 4 pièces par colonne → 4ᵉ rangée visible
-      for(let k=0;k<n;k++){ const row=ROWS-1-k; const idx=row*COLS+c;
-        state[idx]=STATES[Math.floor(Math.random()*3)]; }
-    }
+    for(let k=0;k<TOTAL;k++){ if(Math.random()<0.45) state[k]=STATES[Math.floor(Math.random()*3)]; }
     boards.push(state);
     renderBoard(f,faceGroup);
   }
@@ -103,13 +100,34 @@ function renderBoard(f,faceGroup){
   faceGroup.add(holder); cellMeshes[f]=holder;
 }
 
-// ─── gravité par colonne (matière qui tombe) ───────────────────────────────
-function applyGravity(f){
-  for(let c=0;c<COLS;c++){
-    const stack=[];
-    for(let r=ROWS-1;r>=0;r--){ const v=boards[f][r*COLS+c]; if(v)stack.push(v); }
-    for(let r=ROWS-1;r>=0;r--){ boards[f][r*COLS+c]= stack.length?stack.shift():null; }
-  }
+// ─── POUSSÉE EN CHAÎNE (le nouveau langage) ────────────────────────────────
+// Pousser un bloc dans une direction fait avancer d'UN cran toute la file contiguë
+// dans cette direction. Le bloc de tête, s'il atteint le bord, TOMBE dans le vide.
+// dir : 'left' | 'right' | 'up' | 'down'.  i = index du bloc saisi.
+const DELTA={ left:{dc:-1,dr:0}, right:{dc:1,dr:0}, up:{dc:0,dr:-1}, down:{dc:0,dr:1} };
+function inBounds(c,r){ return c>=0&&c<COLS&&r>=0&&r<ROWS; }
+
+function push(f,i,dir){
+  const b=boards[f]; if(!b[i])return false;
+  const {dc,dr}=DELTA[dir];
+  let c=i%COLS, r=Math.floor(i/COLS);
+  // 1) collecter la file contiguë de blocs à partir du bloc saisi, dans le sens de poussée
+  const chain=[];
+  while(inBounds(c,r) && b[r*COLS+c]){ chain.push(r*COLS+c); c+=dc; r+=dr; }
+  if(chain.length===0)return false;
+  // 2) la tête de file = dernier de la chaîne ; sa case suivante :
+  const headC=(chain[chain.length-1]%COLS)+dc, headR=Math.floor(chain[chain.length-1]/COLS)+dr;
+  const headFalls = !inBounds(headC,headR);            // tête au bord → tombe
+  // si la tête NE tombe pas et que la case devant est occupée → blocage total (rien ne bouge)
+  if(!headFalls && b[headR*COLS+headC]) return false;
+  // 3) avancer chaque bloc d'un cran, du plus avancé au plus reculé (évite l'écrasement)
+  const moved=chain.map(idx=>({ from:idx, st:b[idx] }));
+  if(headFalls) moved.pop();                           // la tête disparaît
+  // vider d'abord toutes les cases source
+  chain.forEach(idx=>b[idx]=null);
+  // réécrire aux nouvelles positions
+  moved.forEach(m=>{ const cc=(m.from%COLS)+dc, rr=Math.floor(m.from/COLS)+dr; b[rr*COLS+cc]=m.st; });
+  return true;
 }
 
 // ─── bascule du prisme autour de X ─────────────────────────────────────────
@@ -140,15 +158,33 @@ function fit(){
 }
 addEventListener('resize',fit);
 
-// ─── entrées : swipe vertical + tap haut/bas ───────────────────────────────
-let sy=null;
-canvas.addEventListener('pointerdown',e=>{ sy=e.clientY; });
+// ─── entrées : saisir un bloc + swipe = direction de poussée ───────────────
+// pointerdown détermine la case saisie ; pointerup donne la direction (4 sens).
+const raycaster=new THREE.Raycaster(), ndc=new THREE.Vector2();
+function pickCell(px,py){
+  const r=canvas.getBoundingClientRect();
+  ndc.x=((px-r.left)/r.width)*2-1; ndc.y=-((py-r.top)/r.height)*2+1;
+  raycaster.setFromCamera(ndc,camera);
+  // La face active au repos est en façade à z=RADIUS (repère monde), plan normal +Z.
+  const pt=new THREE.Vector3();
+  raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,0,1),-RADIUS),pt);
+  if(!pt)return -1;
+  const col=Math.round(pt.x/CELL_W+(COLS-1)/2);
+  const row=Math.round((ROWS-1)/2-pt.y/CELL_W);
+  if(col<0||col>=COLS||row<0||row>=ROWS)return -1;
+  return row*COLS+col;
+}
+let grabIdx=-1, sx=0, sy=0;
+canvas.addEventListener('pointerdown',e=>{ sx=e.clientX; sy=e.clientY; grabIdx=pickCell(e.clientX,e.clientY); });
 canvas.addEventListener('pointerup',e=>{
-  if(sy==null)return; const dy=e.clientY-sy, TH=40;
-  if(Math.abs(dy)<TH){ // tap : moitié haute = faire descendre le plateau du haut
-    if(e.clientY<innerHeight/2) tilt(1); else tilt(-1);
-  } else tilt(dy<0?1:-1);   // swipe up → plateau du haut descend
-  sy=null;
+  if(grabIdx<0){ grabIdx=-1; return; }
+  const dx=e.clientX-sx, dy=e.clientY-sy, TH=24;
+  if(Math.abs(dx)<TH && Math.abs(dy)<TH){ grabIdx=-1; return; }   // simple tap → rien
+  let dir;
+  if(Math.abs(dx)>Math.abs(dy)) dir = dx<0 ? 'left':'right';
+  else                          dir = dy<0 ? 'up':'down';
+  if(push(current,grabIdx,dir)){ const fg=prism.children[current]; renderBoard(current,fg); }
+  grabIdx=-1;
 });
 
 // ─── boucle ────────────────────────────────────────────────────────────────
