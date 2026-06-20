@@ -7,9 +7,10 @@
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden;}
   #c{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;}
-  .hint{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 14px);
-    transform:translateX(-50%);z-index:10;font:12px system-ui,sans-serif;
-    color:rgba(180,200,220,.6);background:rgba(20,22,36,.55);padding:6px 14px;
+  .hint{position:fixed;left:calc(env(safe-area-inset-left,0px) + 14px);
+    bottom:calc(env(safe-area-inset-bottom,0px) + 14px);z-index:10;max-width:170px;
+    font:12px system-ui,sans-serif;line-height:1.4;
+    color:rgba(180,200,220,.6);background:rgba(20,22,36,.55);padding:8px 14px;
     border-radius:16px;backdrop-filter:blur(6px);pointer-events:none;letter-spacing:.3px;}
   .badge{position:fixed;left:calc(env(safe-area-inset-left,0px) + 14px);
     top:calc(env(safe-area-inset-top,0px) + 12px);z-index:10;
@@ -20,7 +21,7 @@
 <body>
 <canvas id="c"></canvas>
 <div class="badge" id="badge">plateau 1 / 4</div>
-<div class="hint">swipe ↕ ou tap haut/bas — le plateau du haut roule vers toi</div>
+<div class="hint">swipe ↕ ou tap haut / bas<br>le plateau du haut roule vers toi</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 /* ─── ADAM · bac à sable PAYSAGE ────────────────────────────────────────────
@@ -138,8 +139,14 @@ function fit(){
   const vFOV=camera.fov*Math.PI/180;
   const needH=(FACE_H*1.25)/(2*Math.tan(vFOV/2));
   const needW=(FACE_W*1.18)/(2*Math.tan(vFOV/2)*aspect);
-  camera.position.set(0,0,Math.max(needH,needW)+RADIUS);
-  camera.lookAt(0,0,0); camera.updateProjectionMatrix();
+  const dist=Math.max(needH,needW)+RADIUS;
+  // le plateau face caméra est centré en (0, RADIUS, ...) ; on vise plus HAUT que lui
+  // pour le faire glisser vers le BAS du cadre. lookY > faceCenterY → grille calée en bas.
+  const worldPerPx=(2*dist*Math.tan(vFOV/2))/h;
+  const dropPx=h*0.16;                       // descente de la grille (16% de la hauteur écran)
+  const lookY=dropPx*worldPerPx;             // la face active est en Y≈0 ; viser au-dessus → grille en bas
+  camera.position.set(0, lookY, dist);
+  camera.lookAt(0, lookY, 0); camera.updateProjectionMatrix();
 }
 addEventListener('resize',fit);
 
