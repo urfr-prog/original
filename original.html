@@ -50,6 +50,10 @@ const STATES=Object.keys(STATE_COL);
 
 function makeCell(state){
   const g=new THREE.Group();
+  // hitbox invisible : carré PLEIN couvrant toute la case (zone cliquable franche, sans gouttière)
+  const hit=new THREE.Mesh(new THREE.PlaneGeometry(CELL_W,CELL_W),
+    new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false}));
+  hit.position.z=-0.001; g.add(hit);
   // corps
   const body=new THREE.Mesh(new THREE.ShapeGeometry(rrShape(SZ,SZ,RR)),
     new THREE.MeshBasicMaterial({color:STATE_COL[state],transparent:true,opacity:0.92}));
@@ -168,21 +172,14 @@ function pickCell(px,py){
   const r=canvas.getBoundingClientRect();
   ndc.x=((px-r.left)/r.width)*2-1; ndc.y=-((py-r.top)/r.height)*2+1;
   raycaster.setFromCamera(ndc,camera);
-  // On vise le PLAN de la face active, où qu'elle soit (suit la bascule du prisme).
-  const faceGroup=prism.children[current]; if(!faceGroup) return -1;
-  faceGroup.updateMatrixWorld(true);
-  // Normale et origine du plan de la face en coordonnées MONDE.
-  const n=new THREE.Vector3(0,0,1).transformDirection(faceGroup.matrixWorld).normalize();
-  const o=new THREE.Vector3().setFromMatrixPosition(faceGroup.matrixWorld);
-  const plane=new THREE.Plane().setFromNormalAndCoplanarPoint(n,o);
-  const pt=new THREE.Vector3();
-  if(!raycaster.ray.intersectPlane(plane,pt)) return -1;
-  // Repasse le point d'impact en coordonnées LOCALES de la face → x,y de la grille.
-  faceGroup.worldToLocal(pt);
-  const col=Math.round(pt.x/CELL_W+(COLS-1)/2);
-  const row=Math.round((ROWS-1)/2-pt.y/CELL_W);
-  if(col<0||col>=COLS||row<0||row>=ROWS)return -1;
-  return row*COLS+col;
+  const holder=cellMeshes[current]; if(!holder) return -1;
+  // Raycast DIRECT sur les cellules de la face active → exact, insensible au décalage caméra.
+  const hits=raycaster.intersectObjects(holder.children,true);
+  if(!hits.length) return -1;
+  // remonte jusqu'au groupe-cellule qui porte userData.idx
+  let o=hits[0].object;
+  while(o && o.userData.idx===undefined){ o=o.parent; }
+  return (o && o.userData.idx!==undefined) ? o.userData.idx : -1;
 }
 let grabIdx=-1, sx=0, sy=0, grabMesh=null;
 function setGrab(idx){
