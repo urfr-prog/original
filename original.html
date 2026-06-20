@@ -20,7 +20,7 @@
    avoir de la matière qui tombe. Rien d'autre : pas de portes, pas de fusion.
    ─────────────────────────────────────────────────────────────────────────── */
 
-const COLS=4, ROWS=4, TOTAL=COLS*ROWS, CELL_W=1.0, NFACES=4;
+const COLS=7, ROWS=4, TOTAL=COLS*ROWS, CELL_W=1.0, NFACES=4;
 const FACE_W=COLS*CELL_W, FACE_H=ROWS*CELL_W, HALF=FACE_H/2;
 // 4 faces régulières → demi-angle π/4 ; rayon pour que les faces se touchent.
 const RADIUS = HALF/Math.tan(Math.PI/4);          // bascule sur X → on cale sur la HAUTEUR
@@ -29,7 +29,7 @@ const FACE_ANG = 2*Math.PI/NFACES;                // 90° entre faces
 const canvas=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
-renderer.setClearColor(0x07080f);
+renderer.setClearColor(0x000000);
 const scene=new THREE.Scene();
 const camera=new THREE.OrthographicCamera(-1,1,1,-1,0.1,200);
 scene.add(new THREE.AmbientLight(0xffffff,0.95));
@@ -75,10 +75,6 @@ function buildBoards(){
     const ang=f*FACE_ANG;                      // f=0 → façade ; f=1 → au-dessus ; etc.
     faceGroup.rotation.x=-ang;                 // incline la face pour qu'elle suive le prisme
     faceGroup.position.set(0, Math.sin(ang)*RADIUS, Math.cos(ang)*RADIUS);  // +Z en façade
-    // léger fond de plateau
-    const back=new THREE.Mesh(new THREE.PlaneGeometry(FACE_W+0.1,FACE_H+0.1),
-      new THREE.MeshBasicMaterial({color:0x121426,transparent:true,opacity:0.55}));
-    back.position.z=-0.02; faceGroup.add(back);
     prism.add(faceGroup);
 
     // remplissage ÉPARS : ~45% de cases occupées, réparties (pas tassées) →
@@ -98,7 +94,7 @@ function renderBoard(f,faceGroup,extraCol){
   const holder=new THREE.Group();
   boards[f].forEach((st,i)=>{ if(!st)return;
     const c=makeCell(st); const p=cellToLocal(i%COLS,Math.floor(i/COLS));
-    c.position.set(p.x,p.y,0.01); holder.add(c); });
+    c.position.set(p.x,p.y,0.01); c.userData.idx=i; holder.add(c); });
   if(extraCol){ for(let r=0;r<ROWS;r++){ const st=extraCol[r]; if(!st)continue;
     const c=makeCell(st); const p=cellToLocal(COLS,r);   // col = COLS → juste hors cadre droit
     c.position.set(p.x,p.y,0.01); holder.add(c); } }
@@ -189,12 +185,27 @@ canvas.addEventListener('pointerup',e=>{
   let dir;
   if(Math.abs(dx)>Math.abs(dy)) dir = dx<0 ? 'left':'right';
   else                          dir = dy<0 ? 'up':'down';
-  // bouger le bloc sur une voisine libre ; si réussi → le déroulé glisse d'un cran à gauche
-  if(!sliding && moveBlock(current,grabIdx,dir)){
-    startSlide(current);
+  // si la case voisine est libre : on ANIME d'abord le bloc vers elle, puis le plateau défile.
+  if(!sliding && !movingBlock){
+    const {dc,dr}=DELTA[dir];
+    const c=grabIdx%COLS+dc, r=Math.floor(grabIdx/COLS)+dr;
+    if(inBounds(c,r) && !boards[current][c+r*COLS]){
+      startBlockMove(current, grabIdx, c+r*COLS, dir);
+    }
   }
   grabIdx=-1;
 });
+
+// ─── animation du BLOC déplacé (on voit la pièce glisser vers sa voisine) ────
+let movingBlock=null;   // { face, fromIdx, toIdx, mesh, t, from:{x,y}, to:{x,y} }
+function startBlockMove(f, fromIdx, toIdx, dir){
+  const holder=cellMeshes[f]; if(!holder){ moveBlock(f,fromIdx,dir); startSlide(f); return; }
+  const mesh=holder.children.find(ch=>ch.userData.idx===fromIdx);
+  if(!mesh){ moveBlock(f,fromIdx,dir); startSlide(f); return; }
+  const a=cellToLocal(fromIdx%COLS,Math.floor(fromIdx/COLS));
+  const b=cellToLocal(toIdx%COLS,Math.floor(toIdx/COLS));
+  movingBlock={ face:f, fromIdx, toIdx, dir, mesh, t:0, from:{x:a.x,y:a.y}, to:{x:b.x,y:b.y} };
+}
 
 // ─── animation du défilement (glissement doux d'une colonne vers la gauche) ──
 let sliding=false, slideX=0, slideFresh=null, slideFace=0;
@@ -211,6 +222,17 @@ function animate(){
     prismAngle += (targetAngle-prismAngle)*0.16;
     if(Math.abs(targetAngle-prismAngle)<0.001){ prismAngle=targetAngle; animating=false; }
     prism.rotation.x=prismAngle;
+  }
+  if(movingBlock){
+    const mb=movingBlock; mb.t += 0.16;
+    const e=mb.t>=1?1:1-Math.pow(1-mb.t,3);          // easeOutCubic
+    mb.mesh.position.x = mb.from.x+(mb.to.x-mb.from.x)*e;
+    mb.mesh.position.y = mb.from.y+(mb.to.y-mb.from.y)*e;
+    if(mb.t>=1){
+      moveBlock(mb.face, mb.fromIdx, mb.dir);          // commit logique du déplacement
+      movingBlock=null;
+      startSlide(slideFace=mb.face);                   // puis le plateau défile
+    }
   }
   if(sliding){
     slideX += (-CELL_W - slideX)*0.18;
