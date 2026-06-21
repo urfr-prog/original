@@ -20,11 +20,11 @@
    avoir de la matière qui tombe. Rien d'autre : pas de portes, pas de fusion.
    ─────────────────────────────────────────────────────────────────────────── */
 
-const COLS=7, ROWS=4, TOTAL=COLS*ROWS, CELL_W=1.0, NFACES=4;
+const COLS=7, ROWS=4, TOTAL=COLS*ROWS, CELL_W=1.0, NFACES=1;
 const FACE_W=COLS*CELL_W, FACE_H=ROWS*CELL_W, HALF=FACE_H/2;
-// 4 faces régulières → demi-angle π/4 ; rayon pour que les faces se touchent.
-const RADIUS = HALF/Math.tan(Math.PI/4);          // bascule sur X → on cale sur la HAUTEUR
-const FACE_ANG = 2*Math.PI/NFACES;                // 90° entre faces
+const RADIUS = 0;                                 // mono-face : plat, pas de prisme
+const FACE_ANG = 2*Math.PI/4;
+const LEVEL_LEN = 50;                             // longueur du couloir (colonnes)
 
 const canvas=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
@@ -61,13 +61,18 @@ function icoSVG(name){ const d=ICO[name]; if(!d)return'';
  if(d.t==='line')  {const[x1,y1,x2,y2]=d.d.split(',');return `<line class="i" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;}
  return''; }
 
-// Texture d'un domino : dalle noire arrondie + icône centrée. Pas d'état, pas de couleur.
+// Texture domino façon STACK : dalle noire arrondie, DEUX icônes (haut/bas),
+// fine médiane de séparation. Pas d'état, pas de couleur. La PAIRE d'icônes
+// (haut+bas) est le critère de fusion.
 const _texCache={};
-function getDominoTex(icon){
- if(_texCache[icon]) return _texCache[icon];
+function getDominoTex(top,bot){
+ const key=top+'|'+bot; if(_texCache[key]) return _texCache[key];
  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 90 90">
-  <style>.i{stroke:${ICON_COL};stroke-width:5;stroke-linecap:round;stroke-linejoin:round;fill:none;}</style>
-  <g transform="translate(0,23) scale(1,1.45)">${icoSVG(icon)}</g></svg>`;
+  <style>.i{stroke:${ICON_COL};stroke-width:4;stroke-linecap:round;stroke-linejoin:round;fill:none;}
+         .s{stroke:rgba(160,170,190,0.28);stroke-width:1.2;}</style>
+  <line class="s" x1="14" y1="45" x2="76" y2="45"/>
+  <g>${icoSVG(top)}</g>
+  <g transform="translate(0,45)">${icoSVG(bot)}</g></svg>`;
  const S=256, cv=document.createElement('canvas'); cv.width=S; cv.height=S;
  const ctx=cv.getContext('2d');
  const tex=new THREE.CanvasTexture(cv); tex.needsUpdate=false;
@@ -79,10 +84,15 @@ function getDominoTex(icon){
   ctx.beginPath();ctx.moveTo(m+rd,m);ctx.lineTo(S-m-rd,m);ctx.quadraticCurveTo(S-m,m,S-m,m+rd);ctx.lineTo(S-m,S-m-rd);ctx.quadraticCurveTo(S-m,S-m,S-m-rd,S-m);ctx.lineTo(m+rd,S-m);ctx.quadraticCurveTo(m,S-m,m,S-m-rd);ctx.lineTo(m,m+rd);ctx.quadraticCurveTo(m,m,m+rd,m);ctx.closePath();ctx.fill();
   ctx.drawImage(img,m+2,m+2,S-m*2-4,S-m*2-4);
   tex.needsUpdate=true;URL.revokeObjectURL(url); };
- img.src=url; _texCache[icon]=tex; return tex;
+ img.src=url; _texCache[key]=tex; return tex;
 }
 
-// makeCell(v) : v est soit une icône (domino), soit '#' (mur). Retourne un groupe.
+// Un domino = objet {top,bot}. clé d'identité fusion = "top|bot".
+const dKey=d=>d.top+'|'+d.bot;
+function makeDomino(){ const a=ICONS[Math.floor(Math.random()*ICONS.length)],
+                            b=ICONS[Math.floor(Math.random()*ICONS.length)]; return {top:a,bot:b}; }
+
+// makeCell(v) : v est soit un domino {top,bot}, soit '#' (mur), soit null.
 function makeCell(v){
   const g=new THREE.Group();
   const HIT=SZ+0.04;
@@ -90,7 +100,6 @@ function makeCell(v){
     new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false}));
   hit.position.z=-0.001; g.add(hit);
   if(v==='#'){
-    // MUR : dalle de pierre arrondie, mate, sans icône.
     const body=new THREE.Mesh(new THREE.ShapeGeometry(rrShape(SZ,SZ,RR)),
       new THREE.MeshBasicMaterial({color:0x2a2c34,transparent:true,opacity:0.96}));
     g.add(body);
@@ -100,9 +109,8 @@ function makeCell(v){
       new THREE.MeshBasicMaterial({color:0x55596a,transparent:true,opacity:0.8})));
     return g;
   }
-  // DOMINO : plan texturé (icône) — l'icône est le seul critère de fusion.
   const face=new THREE.Mesh(new THREE.PlaneGeometry(SZ,SZ),
-    new THREE.MeshBasicMaterial({map:getDominoTex(v),transparent:true}));
+    new THREE.MeshBasicMaterial({map:getDominoTex(v.top,v.bot),transparent:true}));
   g.add(face);
   const frame=new THREE.Shape(); rrShape(SZ,SZ,RR).getPoints(40).forEach((p,i)=>i?frame.lineTo(p.x,p.y):frame.moveTo(p.x,p.y));
   frame.holes.push(rrShape(SZ-2*EDGE_W,SZ-2*EDGE_W,Math.max(0.01,RR-EDGE_W)));
@@ -111,32 +119,42 @@ function makeCell(v){
   return g;
 }
 
-// ─── 4 plateaux 4×4, un par face du prisme ─────────────────────────────────
+// ─── 1 plateau visible 7×4, alimenté par un couloir de 50 colonnes ─────────
 function cellToLocal(col,row){ return { x:(col-(COLS-1)/2)*CELL_W, y:((ROWS-1)/2-row)*CELL_W }; }
-const boards=[];   // boards[f][i] = state | null
+const boards=[];   // boards[0][i] = domino{top,bot} | '#' | null
+
+// ── LE COULOIR : 50 colonnes dessinées à la main (4 lignes de haut). ────────
+// '#'=mur, '.'=vide, 'D'=domino aléatoire. Chambres, chicanes, goulets.
+const LEVEL_ART=[
+ "..#....##....#......#..##....#....##......#...##...",
+ "DD..DD..D..DD..DDD..D..DD..DD..D..DD..DDD..D..DD..D",
+ "DD..DD..D..DD..DDD..D..DD..DD..D..DD..DDD..D..DD..D",
+ "..#....##....#......#..##....#....##......#...##...",
+];
+// matrice level[row][col] de longueur LEVEL_LEN
+const level=[];
+for(let r=0;r<ROWS;r++){ const row=[];
+  for(let c=0;c<LEVEL_LEN;c++){ const ch=LEVEL_ART[r][c]||'.';
+    row.push(ch==='#'?'#':(ch==='D'?makeDomino():null)); }
+  level.push(row); }
+let scrollCol=0;   // colonne de gauche de la fenêtre visible dans le couloir
+
+function colFromLevel(c){ // renvoie la colonne (tableau ROWS) du couloir à l'indice c (cyclique)
+  const cc=((c%LEVEL_LEN)+LEVEL_LEN)%LEVEL_LEN;
+  const out=[]; for(let r=0;r<ROWS;r++){ const v=level[r][cc]; out.push(v==='#'?'#':(v?{top:v.top,bot:v.bot}:null)); }
+  return out;
+}
 
 function buildBoards(){
-  for(let f=0;f<NFACES;f++){
-    const faceGroup=new THREE.Group();
-    // Prisme basculant autour de X. La face ACTIVE doit être en façade (+Z), centrée Y=0,
-    // et parfaitement face caméra. On part donc de l'angle 0 = façade, et on monte les autres
-    // faces au-dessus (elles redescendront vers toi à la bascule).
-    const ang=f*FACE_ANG;                      // f=0 → façade ; f=1 → au-dessus ; etc.
-    faceGroup.rotation.x=-ang;                 // incline la face pour qu'elle suive le prisme
-    faceGroup.position.set(0, Math.sin(ang)*RADIUS, Math.cos(ang)*RADIUS);  // +Z en façade
-    prism.add(faceGroup);
-
-    // LABYRINTHE : murs épars (~18%) + dominos à icônes (~40%) ; le reste vide.
-    // Le board contient : une icône (domino), '#' (mur fixe), ou null (couloir).
-    const state=new Array(TOTAL).fill(null);
-    for(let k=0;k<TOTAL;k++){
-      const rnd=Math.random();
-      if(rnd<0.18) state[k]='#';                                       // mur
-      else if(rnd<0.58) state[k]=ICONS[Math.floor(Math.random()*ICONS.length)]; // domino
-    }
-    boards.push(state);
-    renderBoard(f,faceGroup);
-  }
+  const faceGroup=new THREE.Group();
+  faceGroup.position.set(0,0,0);
+  prism.add(faceGroup);
+  // charge la fenêtre initiale (7 premières colonnes du couloir)
+  const state=new Array(TOTAL).fill(null);
+  for(let c=0;c<COLS;c++){ const col=colFromLevel(scrollCol+c);
+    for(let r=0;r<ROWS;r++){ state[r*COLS+c]=col[r]; } }
+  boards.push(state);
+  renderBoard(0,faceGroup);
 }
 
 const cellMeshes=[];   // cellMeshes[f] = group of cells, rebuilt on change
@@ -165,14 +183,9 @@ function renderBoard(f,faceGroup,extraCol,extraSide){
   faceGroup.add(holder); cellMeshes[f]=holder;
 }
 
-function randCell(){
-  const rnd=Math.random();
-  if(rnd<0.18) return '#';
-  if(rnd<0.58) return ICONS[Math.floor(Math.random()*ICONS.length)];
-  return null;
-}
-function newColumn(){ const col=new Array(ROWS).fill(null); for(let r=0;r<ROWS;r++) col[r]=randCell(); return col; }
-function newLine(){  const line=new Array(COLS).fill(null); for(let c=0;c<COLS;c++) line[c]=randCell(); return line; }
+// La colonne neuve qui entre = la colonne suivante du COULOIR (défilement gauche).
+function newColumn(){ scrollCol++; return colFromLevel(scrollCol+COLS-1); }
+function newLine(){ const line=new Array(COLS).fill(null); return line; } // haut/bas désactivés
 
 // ─── helpers labyrinthe ────────────────────────────────────────────────────
 const isWall =v=>v==='#';
@@ -241,27 +254,26 @@ function corridorEmpty(b,i1,i2,horizontal){
 
 function findFusion(f){
   const b=boards[f];
-  // 1) CHAÎNE à 3 : un centre dont les deux opposés portent la même icône que lui.
+  const same=(p,q)=>isDomino(p)&&isDomino(q)&&dKey(p)===dKey(q);
+  // 1) CHAÎNE à 3 : un centre dont les deux opposés ont la même paire d'icônes.
   for(let i=0;i<TOTAL;i++){ const c=b[i]; if(!isDomino(c))continue;
     const x=i%COLS,y=Math.floor(i/COLS);
-    if(x>0&&x<COLS-1){ const L=b[i-1],R=b[i+1];
-      if(L===c&&R===c) return {type:'chain',axis:'h',center:i,a:i-1,bb:i+1}; }
-    if(y>0&&y<ROWS-1){ const T=b[i-COLS],B=b[i+COLS];
-      if(T===c&&B===c) return {type:'chain',axis:'v',center:i,a:i-COLS,bb:i+COLS}; }
+    if(x>0&&x<COLS-1){ if(same(b[i-1],c)&&same(b[i+1],c)) return {type:'chain',axis:'h',center:i,a:i-1,bb:i+1}; }
+    if(y>0&&y<ROWS-1){ if(same(b[i-COLS],c)&&same(b[i+COLS],c)) return {type:'chain',axis:'v',center:i,a:i-COLS,bb:i+COLS}; }
   }
-  // 2) FUSION simple : deux dominos adjacents même icône.
+  // 2) FUSION simple : deux dominos adjacents, même paire.
   for(let i=0;i<TOTAL;i++){ const c=b[i]; if(!isDomino(c))continue;
-    const R=neigh(b,i,'right'); if(R!==-1&&b[R]===c) return {type:'simple',axis:'h',a:i,bb:R};
-    const D=neigh(b,i,'down');  if(D!==-1&&b[D]===c) return {type:'simple',axis:'v',a:i,bb:D};
+    const R=neigh(b,i,'right'); if(R!==-1&&same(b[R],c)) return {type:'simple',axis:'h',a:i,bb:R};
+    const D=neigh(b,i,'down');  if(D!==-1&&same(b[D],c)) return {type:'simple',axis:'v',a:i,bb:D};
   }
-  // 3) AIMANT : paire même icône séparée par couloir vide (même ligne ou colonne).
+  // 3) AIMANT : paire identique séparée par couloir vide.
   for(let i=0;i<TOTAL;i++){ const c=b[i]; if(!isDomino(c))continue;
     const x=i%COLS,y=Math.floor(i/COLS);
     for(let c2=x+1;c2<COLS;c2++){ const j=y*COLS+c2; const v=b[j]; if(v==null)continue;
-      if(v===c && corridorEmpty(b,i,j,true)) return {type:'magnet',axis:'h',a:i,bb:j};
-      break; }                                   // 1er obstacle non-vide → stop ce sens
+      if(same(v,c) && corridorEmpty(b,i,j,true)) return {type:'magnet',axis:'h',a:i,bb:j};
+      break; }
     for(let r2=y+1;r2<ROWS;r2++){ const j=r2*COLS+x; const v=b[j]; if(v==null)continue;
-      if(v===c && corridorEmpty(b,i,j,false)) return {type:'magnet',axis:'v',a:i,bb:j};
+      if(same(v,c) && corridorEmpty(b,i,j,false)) return {type:'magnet',axis:'v',a:i,bb:j};
       break; }
   }
   return null;
@@ -295,16 +307,9 @@ function commitScroll(f,fresh,dir){
   }
 }
 
-// ─── bascule du prisme autour de X ─────────────────────────────────────────
-let current=0;                 // index du plateau face caméra
+// ─── mono-face statique (plus de bascule prisme) ───────────────────────────
+let current=0;
 let prismAngle=0, targetAngle=0, animating=false, tiltT=0, tiltFrom=0;
-function tilt(dir){            // dir>0 : plateau du HAUT descend vers toi
-  if(animating)return;
-  current=((current+dir)%NFACES+NFACES)%NFACES;
-  tiltFrom=prismAngle; tiltT=0;
-  targetAngle += dir*FACE_ANG; // tourne le prisme pour amener la face du dessus en façade
-  animating=true;
-}
 
 // ─── caméra paysage plein écran (ORTHOGRAPHIQUE → plat garanti, zéro déformation) ───
 function fit(){
@@ -324,18 +329,17 @@ function fit(){
 }
 addEventListener('resize',fit);
 
-// ─── entrées : SWIPE = sens de la gravité (4 sens) ─────────────────────────
-// Le labyrinthe « bascule » dans le sens du swipe → tous les dominos glissent
-// jusqu'à buter (mur / domino / bord), puis les fusions s'enchaînent.
-let sx=0, sy=0, downAt=0;
-canvas.addEventListener('pointerdown',e=>{ sx=e.clientX; sy=e.clientY; downAt=performance.now(); });
+// ─── entrées : SWIPE HORIZONTAL = sens de la gravité (couloir) ─────────────
+// Haut/bas désactivés (c'est un couloir). Swipe gauche/droite → les dominos
+// glissent jusqu'à buter (mur/domino/bord), puis les fusions s'enchaînent.
+let sx=0, sy=0;
+canvas.addEventListener('pointerdown',e=>{ sx=e.clientX; sy=e.clientY; });
 canvas.addEventListener('pointerup',e=>{
   const dx=e.clientX-sx, dy=e.clientY-sy, TH=24;
-  if(busy) return;                                   // une cascade tourne déjà
-  if(Math.abs(dx)<TH && Math.abs(dy)<TH) return;     // pas de swipe net
-  let grav;
-  if(Math.abs(dx)>=Math.abs(dy)){ grav = dx<0 ? 'left' : 'right'; }
-  else { grav = dy<0 ? 'up' : 'down'; }              // écran : dy>0 = vers le bas
+  if(busy) return;
+  if(Math.abs(dx)<TH) return;                         // pas de swipe horizontal net
+  if(Math.abs(dy)>Math.abs(dx)) return;               // swipe vertical ignoré
+  const grav = dx<0 ? 'left' : 'right';
   startGravity(current, grav);
 });
 
@@ -396,10 +400,10 @@ function resolveFusions(f, grav){
   }};
 }
 
-// Fin de cascade : le labyrinthe défile d'un cran dans le sens de la gravité,
-// une bande neuve entre par l'opposé. Puis on relâche le verrou.
+// Fin de cascade : le COULOIR défile d'un cran vers la gauche (montre la suite),
+// quelle que soit la gravité. Une colonne neuve du niveau entre à droite.
 function endCascade(f, grav){
-  startSlide(f, grav, ()=>{ busy=false; });
+  startSlide(f, 'left', ()=>{ busy=false; });
 }
 
 // ─── DÉFILEMENT (tapis roulant) — sens = celui de la gravité ───────────────
