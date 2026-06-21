@@ -61,18 +61,18 @@ function icoSVG(name){ const d=ICO[name]; if(!d)return'';
  if(d.t==='line')  {const[x1,y1,x2,y2]=d.d.split(',');return `<line class="i" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;}
  return''; }
 
-// Texture domino façon STACK : dalle noire arrondie, DEUX icônes (haut/bas),
-// fine médiane de séparation. Pas d'état, pas de couleur. La PAIRE d'icônes
-// (haut+bas) est le critère de fusion.
+// Texture domino façon STACK : dalle noire arrondie, DEUX icônes (GAUCHE/DROITE),
+// médiane VERTICALE (on défile dans le sens de la lecture). Pas d'état, pas de couleur.
+// La PAIRE d'icônes (gauche+droite) est le critère de fusion.
 const _texCache={};
-function getDominoTex(top,bot){
- const key=top+'|'+bot; if(_texCache[key]) return _texCache[key];
+function getDominoTex(left,right){
+ const key=left+'|'+right; if(_texCache[key]) return _texCache[key];
  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 90 90">
-  <style>.i{stroke:${ICON_COL};stroke-width:4;stroke-linecap:round;stroke-linejoin:round;fill:none;}
+  <style>.i{stroke:${ICON_COL};stroke-width:6;stroke-linecap:round;stroke-linejoin:round;fill:none;}
          .s{stroke:rgba(160,170,190,0.28);stroke-width:1.2;}</style>
-  <line class="s" x1="14" y1="45" x2="76" y2="45"/>
-  <g>${icoSVG(top)}</g>
-  <g transform="translate(0,45)">${icoSVG(bot)}</g></svg>`;
+  <line class="s" x1="45" y1="14" x2="45" y2="76"/>
+  <g transform="translate(0,22) scale(0.5,1)">${icoSVG(left)}</g>
+  <g transform="translate(45,22) scale(0.5,1)">${icoSVG(right)}</g></svg>`;
  const S=256, cv=document.createElement('canvas'); cv.width=S; cv.height=S;
  const ctx=cv.getContext('2d');
  const tex=new THREE.CanvasTexture(cv); tex.needsUpdate=false;
@@ -123,21 +123,27 @@ function makeCell(v){
 function cellToLocal(col,row){ return { x:(col-(COLS-1)/2)*CELL_W, y:((ROWS-1)/2-row)*CELL_W }; }
 const boards=[];   // boards[0][i] = domino{top,bot} | '#' | null
 
-// ── LE COULOIR : 50 colonnes dessinées à la main (4 lignes de haut). ────────
-// '#'=mur, '.'=vide, 'D'=domino aléatoire. Chambres, chicanes, goulets.
+// ── LE COULOIR : 50 colonnes dessinées à la main (4 lignes). ────────────────
+// '#'=mur fixe, '.'=vide, lettres = domino d'un type d'icône (les 2 moitiés
+// identiques pour rester lisible) : a=chevron, b=wave, c=line, d=circle.
+// Composition pensée : paires alignées, chaînes de 3, et couloirs vides pour
+// que l'aimant se déclenche → on voit comment le swipe cherche les fusions.
+const ICOMAP={a:'chevron',b:'wave',c:'line',d:'circle'};
 const LEVEL_ART=[
- "..#....##....#......#..##....#....##......#...##...",
- "DD..DD..D..DD..DDD..D..DD..DD..D..DD..DDD..D..DD..D",
- "DD..DD..D..DD..DDD..D..DD..DD..D..DD..DDD..D..DD..D",
- "..#....##....#......#..##....#....##......#...##...",
+ "......#.b....#..c...#....d.#.a....#.b....#......#d",
+ ".aa...#.b....#c...c.#......#....a.#......#.cc...#.",
+ "....a.#...b..#......#.d.d..#......#.b....#......#d",
+ "......#......#......#......#.a....#....b.#....c.#.",
 ];
-// matrice level[row][col] de longueur LEVEL_LEN
+// matrice level[row][col]
 const level=[];
 for(let r=0;r<ROWS;r++){ const row=[];
-  for(let c=0;c<LEVEL_LEN;c++){ const ch=LEVEL_ART[r][c]||'.';
-    row.push(ch==='#'?'#':(ch==='D'?makeDomino():null)); }
+  for(let c=0;c<LEVEL_LEN;c++){ const ch=(LEVEL_ART[r][c]||'.');
+    if(ch==='#') row.push('#');
+    else if(ICOMAP[ch]){ const ic=ICOMAP[ch]; row.push({top:ic,bot:ic}); }
+    else row.push(null); }
   level.push(row); }
-let scrollCol=0;   // colonne de gauche de la fenêtre visible dans le couloir
+let scrollCol=0;   // colonne de gauche de la fenêtre visible
 
 function colFromLevel(c){ // renvoie la colonne (tableau ROWS) du couloir à l'indice c (cyclique)
   const cc=((c%LEVEL_LEN)+LEVEL_LEN)%LEVEL_LEN;
@@ -183,9 +189,15 @@ function renderBoard(f,faceGroup,extraCol,extraSide){
   faceGroup.add(holder); cellMeshes[f]=holder;
 }
 
-// La colonne neuve qui entre = la colonne suivante du COULOIR (défilement gauche).
-function newColumn(){ scrollCol++; return colFromLevel(scrollCol+COLS-1); }
-function newLine(){ const line=new Array(COLS).fill(null); return line; } // haut/bas désactivés
+// Colonne neuve qui entre, selon le sens de progression dans le couloir.
+//  advance: la fenêtre montre [scrollCol .. scrollCol+COLS-1].
+//  - défilement 'left'  (on progresse) → scrollCol++ ; neuve = bord droit.
+//  - défilement 'right' (on recule)    → scrollCol-- ; neuve = bord gauche.
+function newColumn(slideDir){
+  if(slideDir==='right'){ scrollCol--; return colFromLevel(scrollCol); }
+  scrollCol++; return colFromLevel(scrollCol+COLS-1);
+}
+function newLine(){ const line=new Array(COLS).fill(null); return line; }
 
 // ─── helpers labyrinthe ────────────────────────────────────────────────────
 const isWall =v=>v==='#';
@@ -329,17 +341,19 @@ function fit(){
 }
 addEventListener('resize',fit);
 
-// ─── entrées : SWIPE HORIZONTAL = sens de la gravité (couloir) ─────────────
-// Haut/bas désactivés (c'est un couloir). Swipe gauche/droite → les dominos
-// glissent jusqu'à buter (mur/domino/bord), puis les fusions s'enchaînent.
+// ─── entrées : SWIPE 4 SENS = gravité ──────────────────────────────────────
+// Les 4 sens font glisser les dominos (butée mur/domino/bord). Gauche/droite
+// font AUSSI avancer le couloir (défilement horizontal). Haut/bas : gravité
+// pure, bords fermés, pas de défilement vertical.
 let sx=0, sy=0;
 canvas.addEventListener('pointerdown',e=>{ sx=e.clientX; sy=e.clientY; });
 canvas.addEventListener('pointerup',e=>{
   const dx=e.clientX-sx, dy=e.clientY-sy, TH=24;
   if(busy) return;
-  if(Math.abs(dx)<TH) return;                         // pas de swipe horizontal net
-  if(Math.abs(dy)>Math.abs(dx)) return;               // swipe vertical ignoré
-  const grav = dx<0 ? 'left' : 'right';
+  if(Math.abs(dx)<TH && Math.abs(dy)<TH) return;       // pas de swipe net
+  let grav;
+  if(Math.abs(dx)>=Math.abs(dy)) grav = dx<0 ? 'left' : 'right';
+  else                           grav = dy<0 ? 'up' : 'down';
   startGravity(current, grav);
 });
 
@@ -400,10 +414,14 @@ function resolveFusions(f, grav){
   }};
 }
 
-// Fin de cascade : le COULOIR défile d'un cran vers la gauche (montre la suite),
-// quelle que soit la gravité. Une colonne neuve du niveau entre à droite.
+// Fin de cascade : seuls les swipes HORIZONTAUX font avancer le couloir.
+//  - 'right' : on progresse (le couloir défile vers la gauche, colonne neuve à droite)
+//  - 'left'  : on recule (défile vers la droite, colonne neuve à gauche)
+//  - 'up'/'down' : gravité pure, bords fermés, AUCUN défilement.
 function endCascade(f, grav){
-  startSlide(f, 'left', ()=>{ busy=false; });
+  if(grav==='right'){ startSlide(f,'left',()=>{ busy=false; }); }
+  else if(grav==='left'){ startSlide(f,'right',()=>{ busy=false; }); }
+  else { busy=false; }                                  // haut/bas : rien ne défile
 }
 
 // ─── DÉFILEMENT (tapis roulant) — sens = celui de la gravité ───────────────
@@ -413,7 +431,7 @@ function startSlide(f,dir,after){
   const vertical=(slideDir==='up'||slideDir==='down');
   let side;
   if(vertical){ slideFresh=newLine();  side=(slideDir==='down')?'top':'bottom'; }
-  else        { slideFresh=newColumn(); side=(slideDir==='right')?'left':'right'; }
+  else        { slideFresh=newColumn(slideDir); side=(slideDir==='right')?'left':'right'; }
   renderBoard(f, prism.children[f], slideFresh, side);
   slideT=0; slideFace=f; sliding=true;
 }
