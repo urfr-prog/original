@@ -170,9 +170,13 @@ let scrollCol=0;
 
 function colFromLevel(c){
   const cc=((c%LEVEL_LEN)+LEVEL_LEN)%LEVEL_LEN;
-  const out=[]; for(let r=0;r<ROWS;r++){ const v=level[r][cc];
-    out.push(v==='#'?'#':(v?{f1:v.f1,f2:v.f2,rot:v.rot||0}:null)); }
+  const out=[]; for(let r=0;r<ROWS;r++){ out.push(level[r][cc]); }  // RÉFÉRENCES vivantes
   return out;
+}
+// sauvegarde une colonne de la fenêtre dans l'état persistant du couloir
+function saveColToLevel(colIndex, cells){
+  const cc=((colIndex%LEVEL_LEN)+LEVEL_LEN)%LEVEL_LEN;
+  for(let r=0;r<ROWS;r++){ level[r][cc]=cells[r]; }
 }
 
 function buildBoards(){
@@ -363,11 +367,19 @@ function findFusion(f){
 function commitScroll(f,fresh,dir){
   const b=boards[f];
   if(dir==='right'){
+    // on RECULE : scrollCol a déjà été décrémenté. La colonne qui SORT est celle de droite.
+    // Son index couloir = scrollCol + COLS (la colonne juste après la nouvelle fenêtre).
+    const outCol=[]; for(let r=0;r<ROWS;r++) outCol.push(b[r*COLS+(COLS-1)]);
+    saveColToLevel(scrollCol+COLS, outCol);
     for(let r=0;r<ROWS;r++){
       for(let c=COLS-1;c>0;c--){ b[r*COLS+c]=b[r*COLS+c-1]; }   // décale à droite
       b[r*COLS+0]=fresh[r];                                      // colonne neuve à gauche
     }
   } else if(dir==='left'){
+    // on AVANCE : scrollCol a déjà été incrémenté. La colonne qui SORT est celle de gauche.
+    // Son index couloir = scrollCol - 1 (la colonne juste avant la nouvelle fenêtre).
+    const outCol=[]; for(let r=0;r<ROWS;r++) outCol.push(b[r*COLS+0]);
+    saveColToLevel(scrollCol-1, outCol);
     for(let r=0;r<ROWS;r++){
       for(let c=0;c<COLS-1;c++){ b[r*COLS+c]=b[r*COLS+c+1]; }   // décale à gauche
       b[r*COLS+(COLS-1)]=fresh[r];                              // colonne neuve à droite
