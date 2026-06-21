@@ -24,6 +24,7 @@ const COLS=9, ROWS=5, TOTAL=COLS*ROWS, CELL_W=1.0, NFACES=1;
 const FACE_W=COLS*CELL_W, FACE_H=ROWS*CELL_W, HALF=FACE_H/2;
 const RADIUS = 0;                                 // mono-face : plat, pas de prisme
 const FACE_ANG = 2*Math.PI/4;
+const LEVEL_LEN = 50;                             // longueur du couloir (colonnes)
 
 const canvas=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
@@ -150,38 +151,38 @@ const PAIR={
  '1':['wave','chevron'], '2':['chevron','line'], '3':['line','circle'],
  '4':['circle','wave'],  '5':['chevron','chevron'], '6':['wave','wave']
 };
-// ─── VITRINE 9×5 (fixe, pas de régénération). Une LIGNE = une démo, déclenchée
-//     par un swipe DROITE (tout glisse à droite, le couloir se ferme, la fusion joue).
-//   L0 fusion simple    : 5 5 adjacents (chevron==chevron au contact)
-//   L1 twin             : 5 ........ 5 (miroir parfait à distance, couloir vide)
-//   L2 aimant simple    : 1 ....... 2 (1.droite=chevron == 2.gauche=chevron)
-//   L3 chaîne à 3       : 1 2 3 adjacents (centre 2 matché des deux côtés)
-//   L4 aimant-chaîne    : 1 .. 2 .. 3 (centre 2 ; proie 1 à gauche, proie 3 à droite)
 const LEVEL_ART=[
- "....5.5..",
- "5.......5",
- "1.......2",
- "...1.2.3.",
- "1..2..3..",
+ "##.#####.#####.#####.#####.#####.#####.#####.#####",
+ "3..4..1..#..5..6..1#.3..2..4.#5..1..2..#..3..4...#",
+ "12..#34..55..1#23..66..2#34..1.4..#5.5..21..#3..66",
+ "4..1..2..#..6..5..2#.1..4..3.#1..5..6..#..3..1...#",
+ "#####.#####.#####.#####.#####.#####.#####.#####.##",
 ];
 const level=[];
 for(let r=0;r<ROWS;r++){ const row=[];
-  for(let c=0;c<COLS;c++){ const ch=(LEVEL_ART[r][c]||'.');
+  for(let c=0;c<LEVEL_LEN;c++){ const ch=(LEVEL_ART[r][c]||'.');
     if(ch==='#') row.push('#');
     else if(ch==='D') row.push(makeDomino());
     else if(PAIR[ch]){ const[a,b]=PAIR[ch]; row.push({f1:a,f2:b,rot:0}); }
     else row.push(null); }
   level.push(row); }
+let scrollCol=0;
+
+function colFromLevel(c){
+  const cc=((c%LEVEL_LEN)+LEVEL_LEN)%LEVEL_LEN;
+  const out=[]; for(let r=0;r<ROWS;r++){ const v=level[r][cc];
+    out.push(v==='#'?'#':(v?{f1:v.f1,f2:v.f2,rot:v.rot||0}:null)); }
+  return out;
+}
 
 function buildBoards(){
   const faceGroup=new THREE.Group();
   faceGroup.position.set(0,0,0);
   prism.add(faceGroup);
+  // charge la fenêtre initiale (7 premières colonnes du couloir)
   const state=new Array(TOTAL).fill(null);
-  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
-    const v=level[r][c];
-    state[r*COLS+c]= v==='#' ? '#' : (v?{f1:v.f1,f2:v.f2,rot:v.rot||0}:null);
-  }
+  for(let c=0;c<COLS;c++){ const col=colFromLevel(scrollCol+c);
+    for(let r=0;r<ROWS;r++){ state[r*COLS+c]=col[r]; } }
   boards.push(state);
   renderBoard(0,faceGroup);
 }
@@ -211,6 +212,16 @@ function renderBoard(f,faceGroup,extraCol,extraSide){
     } }
   faceGroup.add(holder); cellMeshes[f]=holder;
 }
+
+// Colonne neuve qui entre, selon le sens de progression dans le couloir.
+//  advance: la fenêtre montre [scrollCol .. scrollCol+COLS-1].
+//  - défilement 'left'  (on progresse) → scrollCol++ ; neuve = bord droit.
+//  - défilement 'right' (on recule)    → scrollCol-- ; neuve = bord gauche.
+function newColumn(slideDir){
+  if(slideDir==='right'){ scrollCol--; return colFromLevel(scrollCol); }
+  scrollCol++; return colFromLevel(scrollCol+COLS-1);
+}
+function newLine(){ const line=new Array(COLS).fill(null); return line; }
 
 // ─── helpers labyrinthe ────────────────────────────────────────────────────
 const isWall =v=>v==='#';
@@ -346,6 +357,34 @@ function findFusion(f){
   return null;
 }
 
+// commit logique du défilement, selon le sens.
+// 'left'  : décale à gauche, colonne neuve à DROITE.
+// 'right' : décale à droite, colonne neuve à GAUCHE.
+function commitScroll(f,fresh,dir){
+  const b=boards[f];
+  if(dir==='right'){
+    for(let r=0;r<ROWS;r++){
+      for(let c=COLS-1;c>0;c--){ b[r*COLS+c]=b[r*COLS+c-1]; }   // décale à droite
+      b[r*COLS+0]=fresh[r];                                      // colonne neuve à gauche
+    }
+  } else if(dir==='left'){
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS-1;c++){ b[r*COLS+c]=b[r*COLS+c+1]; }   // décale à gauche
+      b[r*COLS+(COLS-1)]=fresh[r];                              // colonne neuve à droite
+    }
+  } else if(dir==='down'){
+    for(let c=0;c<COLS;c++){
+      for(let r=ROWS-1;r>0;r--){ b[r*COLS+c]=b[(r-1)*COLS+c]; } // décale vers le bas
+      b[0*COLS+c]=fresh[c];                                      // ligne neuve en haut
+    }
+  } else { // up
+    for(let c=0;c<COLS;c++){
+      for(let r=0;r<ROWS-1;r++){ b[r*COLS+c]=b[(r+1)*COLS+c]; } // décale vers le haut
+      b[(ROWS-1)*COLS+c]=fresh[c];                              // ligne neuve en bas
+    }
+  }
+}
+
 // ─── mono-face statique (plus de bascule prisme) ───────────────────────────
 let current=0;
 let prismAngle=0, targetAngle=0, animating=false, tiltT=0, tiltFrom=0;
@@ -439,9 +478,26 @@ function resolveFusions(f, grav){
   }};
 }
 
-// Fin de cascade : VITRINE FIXE, aucun défilement. Les 4 sens = gravité pure.
+// Fin de cascade : seuls les swipes HORIZONTAUX font avancer le couloir.
+//  - 'right' : on progresse (le couloir défile vers la gauche, colonne neuve à droite)
+//  - 'left'  : on recule (défile vers la droite, colonne neuve à gauche)
+//  - 'up'/'down' : gravité pure, bords fermés, AUCUN défilement.
 function endCascade(f, grav){
-  busy=false;
+  if(grav==='right'){ startSlide(f,'left',()=>{ busy=false; }); }
+  else if(grav==='left'){ startSlide(f,'right',()=>{ busy=false; }); }
+  else { busy=false; }                                  // haut/bas : rien ne défile
+}
+
+// ─── DÉFILEMENT (tapis roulant) — sens = celui de la gravité ───────────────
+let sliding=false, slideFresh=null, slideFace=0, slideT=0, slideDir='down', slideAfter=null;
+function startSlide(f,dir,after){
+  slideDir=dir||'down'; slideAfter=after||null;
+  const vertical=(slideDir==='up'||slideDir==='down');
+  let side;
+  if(vertical){ slideFresh=newLine();  side=(slideDir==='down')?'top':'bottom'; }
+  else        { slideFresh=newColumn(slideDir); side=(slideDir==='right')?'left':'right'; }
+  renderBoard(f, prism.children[f], slideFresh, side);
+  slideT=0; slideFace=f; sliding=true;
 }
 
 // ─── boucle ────────────────────────────────────────────────────────────────
@@ -466,6 +522,22 @@ function animate(now){
       if(it.fade){ it.mesh.traverse(o=>{ if(o.material&&o.material.opacity!==undefined){ o.material.transparent=true; o.material.opacity=Math.max(0,1-tt); } }); }
     }
     if(anim.t>=1){ const after=anim.after; anim=null; after&&after(); }
+  }
+  if(sliding){
+    slideT += dt/MOVE_DUR/2.2;
+    const tt=slideT>=1?1:slideT;
+    const e=1-Math.pow(1-tt,3);
+    const vertical=(slideDir==='up'||slideDir==='down');
+    const holder=cellMeshes[slideFace];
+    if(vertical){ const sign=(slideDir==='down')?-1:1; if(holder){ holder.position.y=sign*CELL_W*e; holder.position.x=0; } }
+    else        { const sign=(slideDir==='right')?1:-1; if(holder){ holder.position.x=sign*CELL_W*e; holder.position.y=0; } }
+    if(slideT>=1){
+      commitScroll(slideFace, slideFresh, slideDir);
+      if(holder){ holder.position.x=0; holder.position.y=0; }
+      renderBoard(slideFace, prism.children[slideFace]);
+      sliding=false; slideFresh=null;
+      const after=slideAfter; slideAfter=null; after&&after();
+    }
   }
   renderer.render(scene,camera);
 }
