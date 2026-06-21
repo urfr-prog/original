@@ -45,34 +45,39 @@ function rrShape(w,h,r){ const s=new THREE.Shape(),x=-w/2,y=-h/2;
   s.lineTo(x+r,y+h); s.quadraticCurveTo(x,y+h,x,y+h-r);
   s.lineTo(x,y+r); s.quadraticCurveTo(x,y,x+r,y); return s; }
 
-// ─── ICÔNES (portées de v58, viewBox 0 0 90 90) — seul critère de fusion ───
+// ═══ GRAPHISME EXACT DE STACK v58 (porté verbatim) ════════════════════════
+// ICO : chaque icône a une face1 et une face2 (deux dessins distincts).
 const ICO={
- chevron:{d:'M20 32L45 12L70 32',t:'path'},
- circle:{d:'45,22,12',t:'circle'},
- line:{d:'15,22,75,22',t:'line'},
- wave:{d:'M 29 22 Q 29 12 37 12 Q 45 12 45 22 Q 45 32 53 32 Q 61 32 61 22 Q 61 12 53 12 Q 45 12 45 22 Q 45 32 37 32 Q 29 32 29 22 Z',t:'path'}
+ chevron:{f1:'M20 32L45 12L70 32',f2:'M20 12L45 32L70 12',t:'path'},
+ circle:{f1:'45,22,12',f2:'45,22,12',t:'circle'},
+ line:{f1:'15,22,75,22',f2:'15,22,75,22',t:'line'},
+ wave:{f1:'M 29 22 Q 29 12 37 12 Q 45 12 45 22 Q 45 32 53 32 Q 61 32 61 22 Q 61 12 53 12 Q 45 12 45 22 Q 45 32 37 32 Q 29 32 29 22 Z',f2:'M 29 22 Q 29 12 37 12 Q 45 12 45 22 Q 45 32 53 32 Q 61 32 61 22 Q 61 12 53 12 Q 45 12 45 22 Q 45 32 37 32 Q 29 32 29 22 Z',t:'path'}
 };
-const ICONS=Object.keys(ICO);          // 4 icônes : chevron/wave/line/circle
-const ICON_COL='rgba(205,214,228,0.95)';
-
-function icoSVG(name){ const d=ICO[name]; if(!d)return'';
- if(d.t==='path')  return `<path class="i" d="${d.d}"/>`;
- if(d.t==='circle'){const[cx,cy,r]=d.d.split(',');return `<circle class="i" cx="${cx}" cy="${cy}" r="${r}"/>`;}
- if(d.t==='line')  {const[x1,y1,x2,y2]=d.d.split(',');return `<line class="i" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;}
- return''; }
-
-// Texture domino façon STACK : dalle noire arrondie, DEUX icônes (GAUCHE/DROITE),
-// médiane VERTICALE (on défile dans le sens de la lecture). Pas d'état, pas de couleur.
-// La PAIRE d'icônes (gauche+droite) est le critère de fusion.
+const ICONS=Object.keys(ICO);
+function renderIcoSVG(name,f2){
+ const d=ICO[name]; if(!d)return''; const data=f2?d.f2:d.f1;
+ if(d.t==='path')return`<path class="i" d="${data}"/>`;
+ if(d.t==='circle'){const[cx,cy,r]=data.split(',');return`<circle class="i" cx="${cx}" cy="${cy}" r="${r}"/>`;}
+ if(d.t==='line'){const[x1,y1,x2,y2]=data.split(',');return`<line class="i" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;}
+ return'';
+}
+// Palette STC de v58 (portée). On force l'état NEUTRE 'white' partout (pas de couleur).
+const STC={
+ white:{border:'rgba(210,210,220,0.5)',icon:'rgba(210,210,220,0.5)',pt:'rgba(210,210,220,0.5)',sep:'rgba(210,210,220,0.4)',flt:'',bw:1}
+};
 const _texCache={};
-function getDominoTex(left,right){
- const key=left+'|'+right; if(_texCache[key]) return _texCache[key];
+let showMedians=true;   // v58 : médiane affichée entre face1 (haut) et face2 (bas)
+// getDominoTex EXACT de v58 (simplifié : état neutre, pas de regress/muet).
+function getDominoTex(f1,f2,rot){
+ const state='white';
+ const k=f1+'|'+f2+'|'+rot+'|'+state+'|'+(showMedians?'M':''); if(_texCache[k])return _texCache[k];
+ const c=STC[state], r=((rot||0)%360+360)%360;
+ const ic=c.icon, iw=2;
+ const top=renderIcoSVG(f1,false), bot=renderIcoSVG(f2,true);
+ const inner=`${showMedians?'<line class="s" x1="0" y1="45" x2="90" y2="45"/>':''}<g>${top}</g><g transform="translate(0,45)">${bot}</g>`;
  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 90 90">
-  <style>.i{stroke:${ICON_COL};stroke-width:6;stroke-linecap:round;stroke-linejoin:round;fill:none;}
-         .s{stroke:rgba(160,170,190,0.28);stroke-width:1.2;}</style>
-  <line class="s" x1="45" y1="14" x2="45" y2="76"/>
-  <g transform="translate(0,22) scale(0.5,1)">${icoSVG(left)}</g>
-  <g transform="translate(45,22) scale(0.5,1)">${icoSVG(right)}</g></svg>`;
+  <style>.i{stroke:${ic};stroke-width:${iw};stroke-linecap:round;stroke-linejoin:round;fill:none;}.p{fill:${ic};}.s{stroke:${c.sep};stroke-width:1}</style>
+  <g transform="rotate(${r},45,45)">${inner}</g></svg>`;
  const S=256, cv=document.createElement('canvas'); cv.width=S; cv.height=S;
  const ctx=cv.getContext('2d');
  const tex=new THREE.CanvasTexture(cv); tex.needsUpdate=false;
@@ -84,15 +89,16 @@ function getDominoTex(left,right){
   ctx.beginPath();ctx.moveTo(m+rd,m);ctx.lineTo(S-m-rd,m);ctx.quadraticCurveTo(S-m,m,S-m,m+rd);ctx.lineTo(S-m,S-m-rd);ctx.quadraticCurveTo(S-m,S-m,S-m-rd,S-m);ctx.lineTo(m+rd,S-m);ctx.quadraticCurveTo(m,S-m,m,S-m-rd);ctx.lineTo(m,m+rd);ctx.quadraticCurveTo(m,m,m+rd,m);ctx.closePath();ctx.fill();
   ctx.drawImage(img,m+2,m+2,S-m*2-4,S-m*2-4);
   tex.needsUpdate=true;URL.revokeObjectURL(url); };
- img.src=url; _texCache[key]=tex; return tex;
+ img.src=url; _texCache[k]=tex; return tex;
 }
 
-// Un domino = objet {top,bot}. clé d'identité fusion = "top|bot".
-const dKey=d=>d.top+'|'+d.bot;
+// Un domino = {f1, f2, rot}. Identité de fusion = paire de faces (rot indépendante ici).
+const dKey=d=>d.f1+'|'+d.f2;
 function makeDomino(){ const a=ICONS[Math.floor(Math.random()*ICONS.length)],
-                            b=ICONS[Math.floor(Math.random()*ICONS.length)]; return {top:a,bot:b}; }
+                            b=ICONS[Math.floor(Math.random()*ICONS.length)];
+  return {f1:a,f2:b,rot:0}; }
 
-// makeCell(v) : v est soit un domino {top,bot}, soit '#' (mur), soit null.
+// makeCell(v) : domino {f1,f2,rot}, ou '#' (cube-obstacle), ou null.
 function makeCell(v){
   const g=new THREE.Group();
   const HIT=SZ+0.04;
@@ -100,17 +106,19 @@ function makeCell(v){
     new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false}));
   hit.position.z=-0.001; g.add(hit);
   if(v==='#'){
-    const body=new THREE.Mesh(new THREE.ShapeGeometry(rrShape(SZ,SZ,RR)),
-      new THREE.MeshBasicMaterial({color:0x2a2c34,transparent:true,opacity:0.96}));
+    // CUBE-OBSTACLE de plateau : dalle pierre légèrement plus petite, en relief.
+    const CB=SZ*0.86;
+    const body=new THREE.Mesh(new THREE.ShapeGeometry(rrShape(CB,CB,RR*0.7)),
+      new THREE.MeshBasicMaterial({color:0x3a3d47,transparent:true,opacity:0.98}));
     g.add(body);
-    const frame=new THREE.Shape(); rrShape(SZ,SZ,RR).getPoints(40).forEach((p,i)=>i?frame.lineTo(p.x,p.y):frame.moveTo(p.x,p.y));
-    frame.holes.push(rrShape(SZ-2*EDGE_W,SZ-2*EDGE_W,Math.max(0.01,RR-EDGE_W)));
+    const frame=new THREE.Shape(); rrShape(CB,CB,RR*0.7).getPoints(40).forEach((p,i)=>i?frame.lineTo(p.x,p.y):frame.moveTo(p.x,p.y));
+    frame.holes.push(rrShape(CB-2*EDGE_W*1.6,CB-2*EDGE_W*1.6,Math.max(0.01,RR*0.7-EDGE_W)));
     g.add(new THREE.Mesh(new THREE.ShapeGeometry(frame),
-      new THREE.MeshBasicMaterial({color:0x55596a,transparent:true,opacity:0.8})));
+      new THREE.MeshBasicMaterial({color:0x6b7080,transparent:true,opacity:0.9})));
     return g;
   }
   const face=new THREE.Mesh(new THREE.PlaneGeometry(SZ,SZ),
-    new THREE.MeshBasicMaterial({map:getDominoTex(v.top,v.bot),transparent:true}));
+    new THREE.MeshBasicMaterial({map:getDominoTex(v.f1,v.f2,v.rot||0),transparent:true}));
   g.add(face);
   const frame=new THREE.Shape(); rrShape(SZ,SZ,RR).getPoints(40).forEach((p,i)=>i?frame.lineTo(p.x,p.y):frame.moveTo(p.x,p.y));
   frame.holes.push(rrShape(SZ-2*EDGE_W,SZ-2*EDGE_W,Math.max(0.01,RR-EDGE_W)));
@@ -123,31 +131,37 @@ function makeCell(v){
 function cellToLocal(col,row){ return { x:(col-(COLS-1)/2)*CELL_W, y:((ROWS-1)/2-row)*CELL_W }; }
 const boards=[];   // boards[0][i] = domino{top,bot} | '#' | null
 
-// ── LE COULOIR : 50 colonnes dessinées à la main (4 lignes). ────────────────
-// '#'=mur fixe, '.'=vide, lettres = domino d'un type d'icône (les 2 moitiés
-// identiques pour rester lisible) : a=chevron, b=wave, c=line, d=circle.
-// Composition pensée : paires alignées, chaînes de 3, et couloirs vides pour
-// que l'aimant se déclenche → on voit comment le swipe cherche les fusions.
-const ICOMAP={a:'chevron',b:'wave',c:'line',d:'circle'};
+// ── LE PLATEAU : 50 colonnes (4 lignes), OUVERT, parsemé de cubes-obstacles. ─
+// Comme un jeu de plateau : pas de chambres fermées, des CUBES isolés ('#') qui
+// stoppent l'élan des dominos quand ils glissent. Les dominos filent jusqu'à
+// buter sur un cube, un autre domino ou le bord.
+//   '#' = cube-obstacle    '.' = case libre
+//   lettres = domino avec une PAIRE de faces fixe (pour des fusions contrôlées) :
+//     a={chevron,wave} b={line,circle} c={wave,chevron} d={circle,line}
+//     e={chevron,chevron} f={wave,wave}        (paires "pleines")
+//   'D' = domino aléatoire (f1,f2 tirés au hasard)
+const PAIR={a:['chevron','wave'],b:['line','circle'],c:['wave','chevron'],
+            d:['circle','line'],e:['chevron','chevron'],f:['wave','wave']};
 const LEVEL_ART=[
- "......#.b....#..c...#....d.#.a....#.b....#......#d",
- ".aa...#.b....#c...c.#......#....a.#......#.cc...#.",
- "....a.#...b..#......#.d.d..#......#.b....#......#d",
- "......#......#......#......#.a....#....b.#....c.#.",
+ "..a..#.....e.e.......#....f..f.....#....d..d....#.",
+ ".a..a.........#....c..c.....#....b..b.....#...e..e",
+ "..b....b.#..e...........#.f......a...a#...........",
+ "............d..d.#..c..........#.........d...#.e..",
 ];
-// matrice level[row][col]
 const level=[];
 for(let r=0;r<ROWS;r++){ const row=[];
   for(let c=0;c<LEVEL_LEN;c++){ const ch=(LEVEL_ART[r][c]||'.');
     if(ch==='#') row.push('#');
-    else if(ICOMAP[ch]){ const ic=ICOMAP[ch]; row.push({top:ic,bot:ic}); }
+    else if(ch==='D') row.push(makeDomino());
+    else if(PAIR[ch]){ const[a,b]=PAIR[ch]; row.push({f1:a,f2:b,rot:0}); }
     else row.push(null); }
   level.push(row); }
-let scrollCol=0;   // colonne de gauche de la fenêtre visible
+let scrollCol=0;
 
-function colFromLevel(c){ // renvoie la colonne (tableau ROWS) du couloir à l'indice c (cyclique)
+function colFromLevel(c){
   const cc=((c%LEVEL_LEN)+LEVEL_LEN)%LEVEL_LEN;
-  const out=[]; for(let r=0;r<ROWS;r++){ const v=level[r][cc]; out.push(v==='#'?'#':(v?{top:v.top,bot:v.bot}:null)); }
+  const out=[]; for(let r=0;r<ROWS;r++){ const v=level[r][cc];
+    out.push(v==='#'?'#':(v?{f1:v.f1,f2:v.f2,rot:v.rot||0}:null)); }
   return out;
 }
 
