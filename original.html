@@ -20,11 +20,10 @@
    avoir de la matière qui tombe. Rien d'autre : pas de portes, pas de fusion.
    ─────────────────────────────────────────────────────────────────────────── */
 
-const COLS=7, ROWS=4, TOTAL=COLS*ROWS, CELL_W=1.0, NFACES=1;
+const COLS=9, ROWS=5, TOTAL=COLS*ROWS, CELL_W=1.0, NFACES=1;
 const FACE_W=COLS*CELL_W, FACE_H=ROWS*CELL_W, HALF=FACE_H/2;
 const RADIUS = 0;                                 // mono-face : plat, pas de prisme
 const FACE_ANG = 2*Math.PI/4;
-const LEVEL_LEN = 50;                             // longueur du couloir (colonnes)
 
 const canvas=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
@@ -66,17 +65,20 @@ const STC={
  white:{border:'rgba(210,210,220,0.5)',icon:'rgba(210,210,220,0.5)',pt:'rgba(210,210,220,0.5)',sep:'rgba(210,210,220,0.4)',flt:'',bw:1}
 };
 const _texCache={};
-let showMedians=true;   // v58 : médiane affichée entre face1 (haut) et face2 (bas)
-// getDominoTex EXACT de v58 (simplifié : état neutre, pas de regress/muet).
+let showMedians=true;   // médiane VERTICALE : face1 à GAUCHE, face2 à DROITE
+// getDominoTex porté de v58, adapté médiane verticale (faces exposées gauche/droite).
 function getDominoTex(f1,f2,rot){
  const state='white';
- const k=f1+'|'+f2+'|'+rot+'|'+state+'|'+(showMedians?'M':''); if(_texCache[k])return _texCache[k];
+ const k=f1+'|'+f2+'|'+rot+'|'+state+'|'+(showMedians?'V':''); if(_texCache[k])return _texCache[k];
  const c=STC[state], r=((rot||0)%360+360)%360;
  const ic=c.icon, iw=2;
- const top=renderIcoSVG(f1,false), bot=renderIcoSVG(f2,true);
- const inner=`${showMedians?'<line class="s" x1="0" y1="45" x2="90" y2="45"/>':''}<g>${top}</g><g transform="translate(0,45)">${bot}</g>`;
+ const lft=renderIcoSVG(f1,false), rgt=renderIcoSVG(f2,true);
+ // chaque glyphe (boîte ~x15-75,y12-32) est recentré puis comprimé dans sa moitié.
+ const inner=`${showMedians?'<line class="s" x1="45" y1="0" x2="45" y2="90"/>':''}`
+  +`<g transform="translate(0,22) scale(0.5,1)">${lft}</g>`
+  +`<g transform="translate(45,22) scale(0.5,1)">${rgt}</g>`;
  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 90 90">
-  <style>.i{stroke:${ic};stroke-width:${iw};stroke-linecap:round;stroke-linejoin:round;fill:none;}.p{fill:${ic};}.s{stroke:${c.sep};stroke-width:1}</style>
+  <style>.i{stroke:${ic};stroke-width:${iw*1.6};stroke-linecap:round;stroke-linejoin:round;fill:none;}.p{fill:${ic};}.s{stroke:${c.sep};stroke-width:1}</style>
   <g transform="rotate(${r},45,45)">${inner}</g></svg>`;
  const S=256, cv=document.createElement('canvas'); cv.width=S; cv.height=S;
  const ctx=cv.getContext('2d');
@@ -137,42 +139,49 @@ const boards=[];   // boards[0][i] = domino{top,bot} | '#' | null
 // buter sur un cube, un autre domino ou le bord.
 //   '#' = cube-obstacle    '.' = case libre
 //   lettres = domino avec une PAIRE de faces fixe (pour des fusions contrôlées) :
-//     a={chevron,wave} b={line,circle} c={wave,chevron} d={circle,line}
-//     e={chevron,chevron} f={wave,wave}        (paires "pleines")
-//   'D' = domino aléatoire (f1,f2 tirés au hasard)
-const PAIR={a:['chevron','wave'],b:['line','circle'],c:['wave','chevron'],
-            d:['circle','line'],e:['chevron','chevron'],f:['wave','wave']};
+//   '#'=cube-obstacle  '.'=libre
+//   Dominos notés par un chiffre = paire de faces {f1(gauche), f2(droite)} :
+//     Avec médiane verticale, A fusionne avec son voisin DROIT B si A.f2 == B.f1.
+//     On compose donc des dominos qui s'enchaînent par les faces.
+//     1={wave,chevron} 2={chevron,line} 3={line,circle} 4={circle,wave}
+//     5={chevron,chevron} 6={wave,wave}   (paires pleines, fusionnent entre elles)
+//   Exemples de fusion : 1 suivi de 2 → face droite 'chevron' = face gauche 'chevron'.
+const PAIR={
+ '1':['wave','chevron'], '2':['chevron','line'], '3':['line','circle'],
+ '4':['circle','wave'],  '5':['chevron','chevron'], '6':['wave','wave']
+};
+// ─── VITRINE 9×5 (fixe, pas de régénération). Une LIGNE = une démo, déclenchée
+//     par un swipe DROITE (tout glisse à droite, le couloir se ferme, la fusion joue).
+//   L0 fusion simple    : 5 5 adjacents (chevron==chevron au contact)
+//   L1 twin             : 5 ........ 5 (miroir parfait à distance, couloir vide)
+//   L2 aimant simple    : 1 ....... 2 (1.droite=chevron == 2.gauche=chevron)
+//   L3 chaîne à 3       : 1 2 3 adjacents (centre 2 matché des deux côtés)
+//   L4 aimant-chaîne    : 1 .. 2 .. 3 (centre 2 ; proie 1 à gauche, proie 3 à droite)
 const LEVEL_ART=[
- "..a..#.....e.e.......#....f..f.....#....d..d....#.",
- ".a..a.........#....c..c.....#....b..b.....#...e..e",
- "..b....b.#..e...........#.f......a...a#...........",
- "............d..d.#..c..........#.........d...#.e..",
+ "....5.5..",
+ "5.......5",
+ "1.......2",
+ "...1.2.3.",
+ "1..2..3..",
 ];
 const level=[];
 for(let r=0;r<ROWS;r++){ const row=[];
-  for(let c=0;c<LEVEL_LEN;c++){ const ch=(LEVEL_ART[r][c]||'.');
+  for(let c=0;c<COLS;c++){ const ch=(LEVEL_ART[r][c]||'.');
     if(ch==='#') row.push('#');
     else if(ch==='D') row.push(makeDomino());
     else if(PAIR[ch]){ const[a,b]=PAIR[ch]; row.push({f1:a,f2:b,rot:0}); }
     else row.push(null); }
   level.push(row); }
-let scrollCol=0;
-
-function colFromLevel(c){
-  const cc=((c%LEVEL_LEN)+LEVEL_LEN)%LEVEL_LEN;
-  const out=[]; for(let r=0;r<ROWS;r++){ const v=level[r][cc];
-    out.push(v==='#'?'#':(v?{f1:v.f1,f2:v.f2,rot:v.rot||0}:null)); }
-  return out;
-}
 
 function buildBoards(){
   const faceGroup=new THREE.Group();
   faceGroup.position.set(0,0,0);
   prism.add(faceGroup);
-  // charge la fenêtre initiale (7 premières colonnes du couloir)
   const state=new Array(TOTAL).fill(null);
-  for(let c=0;c<COLS;c++){ const col=colFromLevel(scrollCol+c);
-    for(let r=0;r<ROWS;r++){ state[r*COLS+c]=col[r]; } }
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+    const v=level[r][c];
+    state[r*COLS+c]= v==='#' ? '#' : (v?{f1:v.f1,f2:v.f2,rot:v.rot||0}:null);
+  }
   boards.push(state);
   renderBoard(0,faceGroup);
 }
@@ -202,16 +211,6 @@ function renderBoard(f,faceGroup,extraCol,extraSide){
     } }
   faceGroup.add(holder); cellMeshes[f]=holder;
 }
-
-// Colonne neuve qui entre, selon le sens de progression dans le couloir.
-//  advance: la fenêtre montre [scrollCol .. scrollCol+COLS-1].
-//  - défilement 'left'  (on progresse) → scrollCol++ ; neuve = bord droit.
-//  - défilement 'right' (on recule)    → scrollCol-- ; neuve = bord gauche.
-function newColumn(slideDir){
-  if(slideDir==='right'){ scrollCol--; return colFromLevel(scrollCol); }
-  scrollCol++; return colFromLevel(scrollCol+COLS-1);
-}
-function newLine(){ const line=new Array(COLS).fill(null); return line; }
 
 // ─── helpers labyrinthe ────────────────────────────────────────────────────
 const isWall =v=>v==='#';
@@ -259,78 +258,92 @@ function applyGravity(f,grav){
   return moves;
 }
 
-// ─── FUSION (icône seule, sans état) : cascade v58 dégraissée ───────────────
-// Priorité : CHAÎNE à 3 (centre matché des 2 côtés) → FUSION simple (2 adjacents)
-//            → AIMANT (paire séparée par couloir vide).
-// Une fusion fait TOUJOURS perdre un domino : le survivant reste tel quel.
-// Retourne un objet décrivant la fusion à animer, ou null si rien.
-function neigh(b,i,dir){ const c=i%COLS,r=Math.floor(i/COLS);
-  if(dir==='left') return c>0?i-1:-1;
-  if(dir==='right')return c<COLS-1?i+1:-1;
-  if(dir==='up')   return r>0?i-COLS:-1;
-  if(dir==='down') return r<ROWS-1?i+COLS:-1;
-  return -1; }
-
-// couloir vide (que des null) entre deux index alignés
+// ═══ FUSION — VRAIE CASCADE DE STACK v58, portée fidèlement ════════════════
+// Adaptation unique : médiane VERTICALE → face1 exposée à GAUCHE, face2 à DROITE
+// (à plat, rot 0). Aucune face exposée en haut/bas : seul l'axe horizontal fusionne,
+// exactement comme Stack où seul l'axe des faces exposées compte.
+// Pas d'état, pas de régresseur, pas de porte (retirés). Conserve : twin, chaîne à 3,
+// fusion simple, aimant simple, aimant-chaîne bilatéral — et l'ORDRE de priorité de v58.
+function getExposedFace(p,dir){
+  if(!isDomino(p)) return null;
+  const r=(((p.rot||0)%360)+360)%360;
+  // médiane verticale : à 0°, face1=gauche, face2=droite ; à 180°, inversé.
+  const map={0:{left:'f1',right:'f2'},180:{left:'f2',right:'f1'},
+             90:{top:'f1',bottom:'f2'},270:{top:'f2',bottom:'f1'}};
+  const f=map[r]&&map[r][dir]; return f?p[f]:null;
+}
 function corridorEmpty(b,i1,i2,horizontal){
   if(horizontal){ const y=Math.floor(i1/COLS); for(let c=(i1%COLS)+1;c<i2%COLS;c++){ if(b[y*COLS+c]!=null)return false; } }
   else { const x=i1%COLS; for(let r=Math.floor(i1/COLS)+1;r<Math.floor(i2/COLS);r++){ if(b[r*COLS+x]!=null)return false; } }
   return true;
 }
-
-function findFusion(f){
-  const b=boards[f];
-  const same=(p,q)=>isDomino(p)&&isDomino(q)&&dKey(p)===dKey(q);
-  // 1) CHAÎNE à 3 : un centre dont les deux opposés ont la même paire d'icônes.
-  for(let i=0;i<TOTAL;i++){ const c=b[i]; if(!isDomino(c))continue;
+// faces au contact coïncident (base de TOUTES les fusions de Stack)
+function magnetMatch(a,dirA,b,dirB){
+  const fa=getExposedFace(a,dirA), fb=getExposedFace(b,dirB);
+  return !!(fa&&fb&&fa===fb);
+}
+// TWIN : miroir parfait (f1==f1 ET f2==f2), même ligne/colonne, couloir vide.
+function findTwinPair(b){
+  for(let i=0;i<TOTAL;i++){ const a=b[i]; if(!isDomino(a))continue;
     const x=i%COLS,y=Math.floor(i/COLS);
-    if(x>0&&x<COLS-1){ if(same(b[i-1],c)&&same(b[i+1],c)) return {type:'chain',axis:'h',center:i,a:i-1,bb:i+1}; }
-    if(y>0&&y<ROWS-1){ if(same(b[i-COLS],c)&&same(b[i+COLS],c)) return {type:'chain',axis:'v',center:i,a:i-COLS,bb:i+COLS}; }
-  }
-  // 2) FUSION simple : deux dominos adjacents, même paire.
-  for(let i=0;i<TOTAL;i++){ const c=b[i]; if(!isDomino(c))continue;
-    const R=neigh(b,i,'right'); if(R!==-1&&same(b[R],c)) return {type:'simple',axis:'h',a:i,bb:R};
-    const D=neigh(b,i,'down');  if(D!==-1&&same(b[D],c)) return {type:'simple',axis:'v',a:i,bb:D};
-  }
-  // 3) AIMANT : paire identique séparée par couloir vide.
-  for(let i=0;i<TOTAL;i++){ const c=b[i]; if(!isDomino(c))continue;
-    const x=i%COLS,y=Math.floor(i/COLS);
-    for(let c2=x+1;c2<COLS;c2++){ const j=y*COLS+c2; const v=b[j]; if(v==null)continue;
-      if(same(v,c) && corridorEmpty(b,i,j,true)) return {type:'magnet',axis:'h',a:i,bb:j};
+    for(let c2=x+1;c2<COLS;c2++){ const j=y*COLS+c2; if(b[j]==null)continue;
+      const q=b[j]; if(isDomino(q)&&q.f1===a.f1&&q.f2===a.f2&&(q.rot||0)===(a.rot||0)&&corridorEmpty(b,i,j,true)) return {i1:i,i2:j,axis:'h'};
       break; }
-    for(let r2=y+1;r2<ROWS;r2++){ const j=r2*COLS+x; const v=b[j]; if(v==null)continue;
-      if(same(v,c) && corridorEmpty(b,i,j,false)) return {type:'magnet',axis:'v',a:i,bb:j};
+    for(let r2=y+1;r2<ROWS;r2++){ const j=r2*COLS+x; if(b[j]==null)continue;
+      const q=b[j]; if(isDomino(q)&&q.f1===a.f1&&q.f2===a.f2&&(q.rot||0)===(a.rot||0)&&corridorEmpty(b,i,j,false)) return {i1:i,i2:j,axis:'v'};
       break; }
   }
   return null;
 }
+// aimant-chaîne bilatéral : un centre qui matche une proie à GAUCHE et à DROITE (couloirs vides)
+function nearestMatch(b,iC,dirCenter,dirProie,forward){
+  const x=iC%COLS,y=Math.floor(iC/COLS);
+  if(forward){ for(let c=x+1;c<COLS;c++){ const j=y*COLS+c; if(b[j]!=null){ return (magnetMatch(b[iC],dirCenter,b[j],dirProie)&&corridorEmpty(b,iC,j,true))?j:-1; } } }
+  else       { for(let c=x-1;c>=0;c--){ const j=y*COLS+c; if(b[j]!=null){ return (magnetMatch(b[j],dirProie,b[iC],dirCenter)&&corridorEmpty(b,j,iC,true))?j:-1; } } }
+  return -1;
+}
+function findChainMagnet(b){
+  for(let iC=0;iC<TOTAL;iC++){ const c=b[iC]; if(!isDomino(c))continue;
+    const lf=nearestMatch(b,iC,'left','right',false);
+    const rg=nearestMatch(b,iC,'right','left',true);
+    if(lf!==-1&&rg!==-1) return {iLo:lf,iC,iHi:rg};
+  }
+  return null;
+}
 
-// commit logique du défilement, selon le sens.
-// 'left'  : décale à gauche, colonne neuve à DROITE.
-// 'right' : décale à droite, colonne neuve à GAUCHE.
-function commitScroll(f,fresh,dir){
+// findFusion : reproduit l'ORDRE EXACT de checkFusions de v58 (sans régresseur/porte).
+//   twin → chaîne adjacente à 3 → fusion simple → aimant-chaîne bilatéral → aimant simple
+function findFusion(f){
   const b=boards[f];
-  if(dir==='right'){
-    for(let r=0;r<ROWS;r++){
-      for(let c=COLS-1;c>0;c--){ b[r*COLS+c]=b[r*COLS+c-1]; }   // décale à droite
-      b[r*COLS+0]=fresh[r];                                      // colonne neuve à gauche
-    }
-  } else if(dir==='left'){
-    for(let r=0;r<ROWS;r++){
-      for(let c=0;c<COLS-1;c++){ b[r*COLS+c]=b[r*COLS+c+1]; }   // décale à gauche
-      b[r*COLS+(COLS-1)]=fresh[r];                              // colonne neuve à droite
-    }
-  } else if(dir==='down'){
-    for(let c=0;c<COLS;c++){
-      for(let r=ROWS-1;r>0;r--){ b[r*COLS+c]=b[(r-1)*COLS+c]; } // décale vers le bas
-      b[0*COLS+c]=fresh[c];                                      // ligne neuve en haut
-    }
-  } else { // up
-    for(let c=0;c<COLS;c++){
-      for(let r=0;r<ROWS-1;r++){ b[r*COLS+c]=b[(r+1)*COLS+c]; } // décale vers le haut
-      b[(ROWS-1)*COLS+c]=fresh[c];                              // ligne neuve en bas
+  // TWIN (miroir parfait)
+  { const tp=findTwinPair(b); if(tp){ return {type:'twin',axis:tp.axis,a:tp.i1,bb:tp.i2}; } }
+  // CHAÎNE ADJACENTE À 3 (centre matché des deux côtés) — horizontal uniquement (médiane V)
+  for(let i=0;i<TOTAL;i++){ const c=b[i]; if(!isDomino(c))continue; const x=i%COLS;
+    if(x>0&&x<COLS-1){ const iL=i-1,iR=i+1;
+      if(isDomino(b[iL])&&isDomino(b[iR])){
+        const a=getExposedFace(b[iL],'right'), bb=getExposedFace(c,'left');
+        const e=getExposedFace(c,'right'),     ff=getExposedFace(b[iR],'left');
+        if(a&&bb&&a===bb&&e&&ff&&e===ff) return {type:'chain',axis:'h',center:i,a:iL,bb:iR};
+      }
     }
   }
+  // FUSION SIMPLE (contact horizontal, faces exposées coïncident)
+  for(let i=0;i<TOTAL;i++){ if(!isDomino(b[i]))continue; const x=i%COLS;
+    const iR=(x<COLS-1)?i+1:-1;
+    if(iR!==-1&&isDomino(b[iR])){
+      const fL=getExposedFace(b[i],'right'), fR=getExposedFace(b[iR],'left');
+      if(fL&&fR&&fL===fR) return {type:'simple',axis:'h',a:i,bb:iR};
+    }
+  }
+  // AIMANT-CHAÎNE BILATÉRAL (priorité sur l'aimant simple)
+  { const cm=findChainMagnet(b); if(cm){ return {type:'chainmagnet',axis:'h',center:cm.iC,a:cm.iLo,bb:cm.iHi}; } }
+  // AIMANT SIMPLE (paire à distance, couloir vide)
+  for(let i=0;i<TOTAL;i++){ const c=b[i]; if(!isDomino(c))continue; const x=i%COLS,y=Math.floor(i/COLS);
+    for(let c2=x+1;c2<COLS;c2++){ const j=y*COLS+c2; if(b[j]==null)continue;
+      if(magnetMatch(c,'right',b[j],'left')&&corridorEmpty(b,i,j,true)) return {type:'magnet',axis:'h',a:i,bb:j};
+      break; }
+  }
+  return null;
 }
 
 // ─── mono-face statique (plus de bascule prisme) ───────────────────────────
@@ -406,10 +419,10 @@ function resolveFusions(f, grav){
   const fu=findFusion(f);
   if(!fu){ endCascade(f, grav); return; }
   const b=boards[f];
-  // Le SURVIVANT : pour chaîne, c'est le centre ; pour simple/aimant, c'est `a`.
-  const survivor = (fu.type==='chain') ? fu.center : fu.a;
-  const losers   = (fu.type==='chain') ? [fu.a, fu.bb] : [fu.bb];
-  // anime les perdants qui glissent vers le survivant (aimant : trajet long ; sinon court)
+  // SURVIVANT : chaîne/aimant-chaîne → centre ; sinon → a. PERDANTS : le reste.
+  const isChain = (fu.type==='chain'||fu.type==='chainmagnet');
+  const survivor = isChain ? fu.center : fu.a;
+  const losers   = isChain ? [fu.a, fu.bb] : [fu.bb];
   const holder=cellMeshes[f];
   const items=[];
   const sLoc=cellToLocal(survivor%COLS,Math.floor(survivor/COLS));
@@ -418,36 +431,17 @@ function resolveFusions(f, grav){
     const a=cellToLocal(L%COLS,Math.floor(L/COLS));
     items.push({mesh,from:{x:a.x,y:a.y},to:{x:sLoc.x,y:sLoc.y},fade:true});
   }
-  // applique la fusion au board : les perdants disparaissent (on perd un domino)
-  for(const L of losers) b[L]=null;
+  for(const L of losers) b[L]=null;          // on perd un (ou deux) domino(s)
   anim={ kind:'fuse', dur:FUSE_DUR, items, t:0, after:()=>{
     renderBoard(f, prism.children[f]);
-    // après une fusion, des vides sont apparus → re-gravité puis on recherche encore
     const mv=applyGravity(f, grav);
     animateMoves(f, mv, ()=>{ renderBoard(f, prism.children[f]); resolveFusions(f, grav); });
   }};
 }
 
-// Fin de cascade : seuls les swipes HORIZONTAUX font avancer le couloir.
-//  - 'right' : on progresse (le couloir défile vers la gauche, colonne neuve à droite)
-//  - 'left'  : on recule (défile vers la droite, colonne neuve à gauche)
-//  - 'up'/'down' : gravité pure, bords fermés, AUCUN défilement.
+// Fin de cascade : VITRINE FIXE, aucun défilement. Les 4 sens = gravité pure.
 function endCascade(f, grav){
-  if(grav==='right'){ startSlide(f,'left',()=>{ busy=false; }); }
-  else if(grav==='left'){ startSlide(f,'right',()=>{ busy=false; }); }
-  else { busy=false; }                                  // haut/bas : rien ne défile
-}
-
-// ─── DÉFILEMENT (tapis roulant) — sens = celui de la gravité ───────────────
-let sliding=false, slideFresh=null, slideFace=0, slideT=0, slideDir='down', slideAfter=null;
-function startSlide(f,dir,after){
-  slideDir=dir||'down'; slideAfter=after||null;
-  const vertical=(slideDir==='up'||slideDir==='down');
-  let side;
-  if(vertical){ slideFresh=newLine();  side=(slideDir==='down')?'top':'bottom'; }
-  else        { slideFresh=newColumn(slideDir); side=(slideDir==='right')?'left':'right'; }
-  renderBoard(f, prism.children[f], slideFresh, side);
-  slideT=0; slideFace=f; sliding=true;
+  busy=false;
 }
 
 // ─── boucle ────────────────────────────────────────────────────────────────
@@ -472,22 +466,6 @@ function animate(now){
       if(it.fade){ it.mesh.traverse(o=>{ if(o.material&&o.material.opacity!==undefined){ o.material.transparent=true; o.material.opacity=Math.max(0,1-tt); } }); }
     }
     if(anim.t>=1){ const after=anim.after; anim=null; after&&after(); }
-  }
-  if(sliding){
-    slideT += dt/MOVE_DUR/2.2;
-    const tt=slideT>=1?1:slideT;
-    const e=1-Math.pow(1-tt,3);
-    const vertical=(slideDir==='up'||slideDir==='down');
-    const holder=cellMeshes[slideFace];
-    if(vertical){ const sign=(slideDir==='down')?-1:1; if(holder){ holder.position.y=sign*CELL_W*e; holder.position.x=0; } }
-    else        { const sign=(slideDir==='right')?1:-1; if(holder){ holder.position.x=sign*CELL_W*e; holder.position.y=0; } }
-    if(slideT>=1){
-      commitScroll(slideFace, slideFresh, slideDir);
-      if(holder){ holder.position.x=0; holder.position.y=0; }
-      renderBoard(slideFace, prism.children[slideFace]);
-      sliding=false; slideFresh=null;
-      const after=slideAfter; slideAfter=null; after&&after();
-    }
   }
   renderer.render(scene,camera);
 }
